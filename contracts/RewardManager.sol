@@ -5,6 +5,7 @@ import {IRewardManager} from "./interfaces/IRewardManager.sol";
 import {RewardScaling} from "./libraries/RewardScaling.sol";
 import {RewardStorage} from "./libraries/RewardStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -12,6 +13,7 @@ import {IRewardError} from "./errors/RewardManagerError.sol";
 
 contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuard, IRewardError {
     using RewardScaling for uint256;
+    using SafeERC20 for IERC20;
 
     bytes32 public constant BACKEND_ROLE = keccak256("BACKEND_ROLE");
 
@@ -72,7 +74,7 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
     // Fund the contract with MSC tokens. Admin calls this to provision rewards.
     function fundPool(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
         RewardStorage.Layout storage s = RewardStorage.layout();
-        IERC20(s.token).transferFrom(msg.sender, address(this), amount);
+        IERC20(s.token).safeTransferFrom(msg.sender, address(this), amount);
     }
 
     // Viewers
@@ -112,7 +114,8 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         RewardStorage.Layout storage s = RewardStorage.layout();
         if (user == address(0)) revert NullAddress(user);
 
-        // basic spam prevention: enforce minimum interval per action
+        if (action == Action.SIGNUP && s.hasSignedUp[user]) return;
+
         uint256 last = s.lastActionTimestamp[user][uint256(action)];
         if (block.timestamp < last + _minInterval(action)) {
             revert TooSoonForAction(user, uint256(action), last, block.timestamp, _minInterval(action));
@@ -120,9 +123,7 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         s.lastActionTimestamp[user][uint256(action)] = block.timestamp;
         s.lastActionMetadata[user][uint256(action)] = metadata;
 
-        // signup special-case: only once
         if (action == Action.SIGNUP) {
-            if (s.hasSignedUp[user]) return;
             s.hasSignedUp[user] = true;
             s.totalUsers += 1;
         }
@@ -144,7 +145,7 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         s.totalDistributed += amount;
         s.lifetimeRewards[user] += amount;
 
-        IERC20(s.token).transfer(user, amount);
+        IERC20(s.token).safeTransfer(user, amount);
 
         emit RewardPaid(user, amount, action, metadata);
     }
@@ -165,8 +166,13 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
     function emergencyWithdraw(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         RewardStorage.Layout storage s = RewardStorage.layout();
         uint256 bal = IERC20(s.token).balanceOf(address(this));
-        require(amount <= bal, "insufficient balance");
-        IERC20(s.token).transfer(to, amount);
+        uint256 allocLeft = s.totalRewardSupply > s.totalDistributed
+            ? s.totalRewardSupply - s.totalDistributed
+            : 0;
+        uint256 reserved = bal < allocLeft ? bal : allocLeft;
+        uint256 withdrawable = bal - reserved;
+        require(amount <= withdrawable, "insufficient balance");
+        IERC20(s.token).safeTransfer(to, amount);
     }
 
     function _onlyBackend() internal view {

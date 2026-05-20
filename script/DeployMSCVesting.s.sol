@@ -10,10 +10,10 @@ contract DeployMSCVesting is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("BACKEND_PRIVATE_KEY");
         address deployerAddress = vm.addr(deployerPrivateKey);
-        
+
         // Use existing SoundCoin (MSC) address on Base Mainnet
         address mscAddress = vm.envOr("MSC_TOKEN_ADDRESS", address(0x4Bb738eb7604Cfa7520E8a00ec208625ac49752B));
-        
+
         vm.startBroadcast(deployerPrivateKey);
 
         console.log("Deploying with address:", deployerAddress);
@@ -32,15 +32,15 @@ contract DeployMSCVesting is Script {
         console.log("vMSC ownership transferred to Vesting contract");
 
         // 4. Configure Categories
-        
+
         // Team: 15% (75M), 1 year cliff, 4 years total
         bytes32 teamCategory = keccak256("TEAM");
         vesting.createVestingCategory(
             teamCategory,
             "Team",
-            75_000_000 * 10**18, // 75M
-            365 days,            // 1 year cliff
-            4 * 365 days         // 4 years total (1460 days)
+            75_000_000 * 10 ** 18, // 75M
+            365 days, // 1 year cliff
+            4 * 365 days // 4 years total (1460 days)
         );
         console.log("Team category created");
 
@@ -49,9 +49,9 @@ contract DeployMSCVesting is Script {
         vesting.createVestingCategory(
             investorCategory,
             "Investors",
-            25_000_000 * 10**18, // 25M
-            180 days,            // ~6 months cliff
-            2 * 365 days         // 2 years total
+            25_000_000 * 10 ** 18, // 25M
+            180 days, // ~6 months cliff
+            2 * 365 days // 2 years total
         );
         console.log("Investor category created");
 

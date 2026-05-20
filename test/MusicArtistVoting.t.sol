@@ -236,7 +236,9 @@ contract MusicArtistVotingTest is Test {
         assertEq(id, 1);
         assertEq(voting.artistIds(1, 0), 1);
 
-        // Start Cycle 2
+        vm.warp(block.timestamp + 101);
+        voting.withdrawTokens();
+
         vm.expectEmit(true, false, false, false);
         emit NewVotingCycleStarted(2);
         voting.startNewVotingCycle();
@@ -257,5 +259,49 @@ contract MusicArtistVotingTest is Test {
         voting.registerArtist(1, "Cycle2 Artist");
         (,,, uint256 votes2) = voting.getArtist(1);
         assertEq(votes2, 0); // Fresh start
+    }
+
+    function test_CannotWithdrawAfterNewCycleWithoutPriorWithdraw() public {
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 100);
+
+        vm.prank(user1);
+        voting.vote(1, 50e18);
+
+        vm.warp(block.timestamp + 101);
+
+        vm.expectRevert("Withdraw previous cycle first");
+        voting.startNewVotingCycle();
+    }
+
+    function test_WithdrawOnlyCycleLockedAmount() public {
+        voting.registerArtist(1, "Cycle1 Artist");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 100);
+
+        vm.prank(user1);
+        voting.vote(1, 30e18);
+
+        vm.warp(block.timestamp + 101);
+        voting.withdrawTokens();
+
+        voting.startNewVotingCycle();
+        voting.registerArtist(1, "Cycle2 Artist");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 100);
+
+        vm.prank(user2);
+        voting.vote(1, 20e18);
+
+        vm.warp(block.timestamp + 101);
+
+        uint256 adminBalBefore = token.balanceOf(address(this));
+        voting.withdrawTokens();
+
+        assertEq(token.balanceOf(address(this)), adminBalBefore + 20e18);
+        assertEq(token.balanceOf(address(voting)), 0);
+    }
+
+    function test_CannotWithdrawWhenVotingWindowNotSet() public {
+        vm.expectRevert("Voting window not set");
+        voting.withdrawTokens();
     }
 }

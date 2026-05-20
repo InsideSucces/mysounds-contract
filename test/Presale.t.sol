@@ -232,6 +232,39 @@ contract PresaleTest is Test {
         presale.buyTokens{value: 1 ether}();
     }
 
+    function test_CannotBuyBeforePresaleStart() public {
+        vm.warp(presaleStartTime - 1);
+
+        vm.deal(buyer1, 1 ether);
+        vm.prank(buyer1);
+        vm.expectRevert(Presale.PresaleClosed.selector);
+        presale.buyTokens{value: 1 ether}();
+    }
+
+    function test_TwapPriceResistsSingleBlockManipulation() public {
+        vm.deal(buyer1, 10 ether);
+        vm.deal(buyer2, 10 ether);
+        vm.deal(address(0xBEEF), 10 ether);
+
+        vm.prank(buyer1);
+        presale.buyTokens{value: 1 ether}();
+
+        vm.warp(block.timestamp + 31 minutes);
+        vm.prank(buyer2);
+        presale.buyTokens{value: 1 ether}();
+        assertApproxEqAbs(soundCoin.balanceOf(buyer2), 2000 * 1e18, 300 * 1e18);
+
+        ethUsdPair.setReserves(uint112(1), uint112(1_000_000 ether));
+
+        vm.warp(block.timestamp + 31 minutes);
+        ethUsdPair.setReserves(uint112(1000 ether), uint112(2_000_000 * 1e6));
+
+        vm.prank(address(0xBEEF));
+        presale.buyTokens{value: 1 ether}();
+        assertApproxEqAbs(soundCoin.balanceOf(address(0xBEEF)), 2000 * 1e18, 300 * 1e18);
+        assertLt(soundCoin.balanceOf(address(0xBEEF)), 100_000 * 1e18);
+    }
+
     function test_DepositTokens_RequiresApproval() public {
         MockERC20 newToken = new MockERC20("New", "NEW", 18);
         newToken.mint(tokenWallet, 1000);

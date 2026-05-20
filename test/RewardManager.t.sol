@@ -174,13 +174,37 @@ contract RewardManagerTest is Test {
     }
 
     function test_EmergencyWithdraw() public {
-        uint256 contractBalance = rewardToken.balanceOf(address(rewardManager));
+        uint256 poolCap = 50_000 * 1e18;
+        RewardManager fundedManager =
+            new RewardManager(address(rewardToken), poolCap, BASE_RATE, admin, backend);
+
+        vm.startPrank(admin);
+        rewardToken.approve(address(fundedManager), INITIAL_FUNDING);
+        fundedManager.fundPool(INITIAL_FUNDING);
+
+        uint256 excess = INITIAL_FUNDING - poolCap;
+        fundedManager.emergencyWithdraw(admin, excess);
+        vm.stopPrank();
+
+        assertEq(rewardToken.balanceOf(address(fundedManager)), poolCap);
+    }
+
+    function test_EmergencyWithdraw_CannotDrainReservedAllocation() public {
+        vm.prank(backend);
+        rewardManager.rewardAction(user1, IRewardManager.Action.SIGNUP, "");
+
+        uint256 reserved = rewardManager.remainingRewards();
+        uint256 bal = rewardToken.balanceOf(address(rewardManager));
+        uint256 excess = bal - reserved;
 
         vm.prank(admin);
-        rewardManager.emergencyWithdraw(admin, contractBalance);
+        rewardManager.emergencyWithdraw(admin, excess);
 
-        assertEq(rewardToken.balanceOf(address(rewardManager)), 0);
-        assertEq(rewardToken.balanceOf(admin), TOTAL_SUPPLY); // Initial mint was TOTAL_SUPPLY, funded INITIAL_FUNDING, then withdrew back.
+        vm.prank(admin);
+        vm.expectRevert("insufficient balance");
+        rewardManager.emergencyWithdraw(admin, 1);
+
+        assertEq(rewardManager.remainingRewards(), reserved);
     }
 
     function test_RemainingRewards() public {

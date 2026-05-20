@@ -1,27 +1,40 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 
 contract Presale is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     IERC20Metadata public immutable soundCoin;
     IUniswapV2Pair public immutable ethUsdPair;
     address public immutable usdToken;
 
+    uint8 private immutable _tokenDecimals;
+    uint256 private immutable _usdAdjustment;
+
     uint256 public sold;
     uint256 public presaleStartTime;
     uint256 public presaleEndTime;
-    address public tokenWallet; // owner funding source for depositTokens
+    address public tokenWallet;
     bool public presaleClosed = false;
 
-    // BUY LIMITS (USD * 1e18)
-    uint256 public constant MIN_BUY = 10 * 1e18; // $10
-    uint256 public constant MAX_BUY = 50000 * 1e18; // $50,000
-
+    uint256 public constant MIN_BUY = 10 * 1e18;
+    uint256 public constant MAX_BUY = 50000 * 1e18;
     uint256 public constant ALLOCATION = 125_000_000 * 1e18;
+    uint32 public constant TWAP_PERIOD = 30 minutes;
+
+    struct PriceObservation {
+        uint256 priceCumulativeUsdPerEth;
+        uint32 timestamp;
+    }
+
+    PriceObservation private _lastObservation;
 
     mapping(address => uint256) public contributions;
 
@@ -40,6 +53,7 @@ contract Presale is Ownable, ReentrancyGuard {
     error AllocationExceeded();
     error BuyLimitExceeded();
     error NotEnoughTokensInContract();
+    error ZeroLiquidity();
 
     constructor(
         address _soundCoinAddress,
@@ -59,51 +73,119 @@ contract Presale is Ownable, ReentrancyGuard {
         ethUsdPair = IUniswapV2Pair(_pairAddress);
         usdToken = _usdToken;
         tokenWallet = msg.sender;
+
+        _tokenDecimals = soundCoin.decimals();
+        uint8 usdDecimals = IERC20Metadata(_usdToken).decimals();
+        require(usdDecimals <= 18, "USD decimals too high");
+        _usdAdjustment = 10 ** (18 - usdDecimals);
     }
 
-    /// @dev presale is active when not manually closed AND current time is within window
     modifier whenPresaleActive() {
-        if (presaleClosed || block.timestamp > presaleEndTime) {
+        if (presaleClosed || block.timestamp < presaleStartTime || block.timestamp > presaleEndTime) {
             revert PresaleClosed();
         }
         _;
     }
 
-    /// @dev considered closed either by owner or when time ended
     modifier whenPresaleClosed() {
         if (!presaleClosed && block.timestamp <= presaleEndTime) revert PresaleNotClosed();
         _;
     }
 
-    /// @notice Buy tokens by sending ETH. Contract must hold enough tokens.
     function buyTokens() public payable whenPresaleActive nonReentrant {
         uint256 ethPaid = msg.value;
         uint256 usdPerEth = getEthPrice();
-
+        _updateOracle();
         uint256 usdValue = (ethPaid * usdPerEth) / 1e18;
 
         if (usdValue < MIN_BUY) revert BuyLimitExceeded();
-        if (contributions[msg.sender] + usdValue > MAX_BUY) revert BuyLimitExceeded();
 
-        uint8 decimals = soundCoin.decimals();
+        uint256 userContribution = contributions[msg.sender];
+        if (userContribution + usdValue > MAX_BUY) revert BuyLimitExceeded();
 
-        uint256 tokensToBuy = (usdValue * (10 ** decimals)) / 1e18;
+        uint256 tokensToBuy = (usdValue * (10 ** _tokenDecimals)) / 1e18;
 
-        if (tokensToBuy + sold > ALLOCATION) revert AllocationExceeded();
+        uint256 soldAmount = sold;
+        if (tokensToBuy + soldAmount > ALLOCATION) revert AllocationExceeded();
+
         uint256 contractBalance = soundCoin.balanceOf(address(this));
         if (contractBalance < tokensToBuy) revert NotEnoughTokensInContract();
 
-        contributions[msg.sender] += usdValue;
-        sold += tokensToBuy;
+        contributions[msg.sender] = userContribution + usdValue;
+        sold = soldAmount + tokensToBuy;
 
-        bool success = soundCoin.transfer(msg.sender, tokensToBuy);
-        if (!success) revert TransferFailed();
+        IERC20(address(soundCoin)).safeTransfer(msg.sender, tokensToBuy);
 
         emit Bought(msg.sender, ethPaid, usdValue, tokensToBuy);
     }
 
-    /// @notice Read ETH price from pair (USD per ETH scaled by 1e18)
     function getEthPrice() public view returns (uint256 usdPerEth) {
+        uint32 obsTimestamp = _lastObservation.timestamp;
+        if (obsTimestamp == 0) {
+            return _spotUsdPerEth();
+        }
+
+        uint256 elapsed = block.timestamp - obsTimestamp;
+        if (elapsed == 0) {
+            return _spotUsdPerEth();
+        }
+
+        uint256 currentCumulative = _currentCumulativeUsdPerEth();
+        usdPerEth = (currentCumulative - _lastObservation.priceCumulativeUsdPerEth) / elapsed;
+    }
+
+    function closePresale() external onlyOwner {
+        presaleClosed = true;
+        emit PresaleClosedEvent();
+    }
+
+    function setTokenWallet(address _wallet) external onlyOwner {
+        if (_wallet == address(0)) revert NullAddress();
+        tokenWallet = _wallet;
+        emit TokenWalletSet(_wallet);
+    }
+
+    function depositTokens(uint256 amount) external onlyOwner nonReentrant {
+        if (tokenWallet == address(0)) revert NullAddress();
+        IERC20(address(soundCoin)).safeTransferFrom(tokenWallet, address(this), amount);
+        emit TokensDeposited(tokenWallet, amount);
+    }
+
+    function withdrawETH(address payable to) external onlyOwner whenPresaleClosed nonReentrant {
+        uint256 bal = address(this).balance;
+        (bool ok,) = to.call{value: bal}("");
+        if (!ok) revert TransferFailed();
+        emit WithdrawETH(bal);
+    }
+
+    function withdrawTokens(address to) external onlyOwner whenPresaleClosed nonReentrant {
+        uint256 contractBalance = soundCoin.balanceOf(address(this));
+        uint256 unsold = 0;
+        uint256 soldAmount = sold;
+        if (ALLOCATION > soldAmount) {
+            uint256 theoreticallyUnsold;
+            unchecked {
+                theoreticallyUnsold = ALLOCATION - soldAmount;
+            }
+            unsold = contractBalance < theoreticallyUnsold ? contractBalance : theoreticallyUnsold;
+        }
+
+        if (unsold == 0) revert TransferFailed();
+
+        IERC20(address(soundCoin)).safeTransfer(to, unsold);
+
+        emit WithdrawTokens(unsold);
+    }
+
+    function getRemainingAllowance() external view returns (uint256) {
+        return soundCoin.allowance(tokenWallet, address(this));
+    }
+
+    receive() external payable {
+        buyTokens();
+    }
+
+    function _spotUsdPerEth() internal view returns (uint256) {
         (uint112 reserve0, uint112 reserve1,) = ethUsdPair.getReserves();
         address token0 = ethUsdPair.token0();
 
@@ -118,62 +200,24 @@ contract Presale is Ownable, ReentrancyGuard {
             reserveEth = reserve0;
         }
 
-        // Adjust for decimals: USD token usually has 6 decimals, WETH has 18
-        uint256 usdDecimals = IERC20Metadata(usdToken).decimals();
-        uint256 usdAdjustment = 10 ** (18 - usdDecimals); // usually 1e12 for 6-decimal tokens
+        if (reserveEth == 0) revert ZeroLiquidity();
 
-        usdPerEth = (reserveUsd * usdAdjustment * 1e18) / reserveEth;
+        return (reserveUsd * _usdAdjustment * 1e18) / reserveEth;
     }
 
-    /// @notice Owner can close presale early
-    function closePresale() external onlyOwner {
-        presaleClosed = true;
-        emit PresaleClosedEvent();
-    }
-
-    function setTokenWallet(address _wallet) external onlyOwner {
-        if (_wallet == address(0)) revert NullAddress();
-        tokenWallet = _wallet;
-        emit TokenWalletSet(_wallet);
-    }
-
-    /// @notice Owner can deposit tokens from tokenWallet (requires tokenWallet approved allowance for this contract)
-    function depositTokens(uint256 amount) external onlyOwner nonReentrant {
-        if (tokenWallet == address(0)) revert NullAddress();
-        bool success = soundCoin.transferFrom(tokenWallet, address(this), amount);
-        if (!success) revert TransferFailed();
-        emit TokensDeposited(tokenWallet, amount);
-    }
-
-    /// @notice Withdraw collected ETH after presale closed or ended
-    function withdrawETH(address payable to) external onlyOwner whenPresaleClosed nonReentrant {
-        uint256 bal = address(this).balance;
-        to.call{value: bal}("");
-        emit WithdrawETH(bal);
-    }
-
-    /// @notice Withdraw unsold tokens (contract holds allocation)
-    function withdrawTokens(address to) external onlyOwner whenPresaleClosed nonReentrant {
-        uint256 contractBalance = soundCoin.balanceOf(address(this));
-        uint256 unsold = 0;
-        if (ALLOCATION > sold) {
-            uint256 theoreticallyUnsold = ALLOCATION - sold;
-            unsold = contractBalance < theoreticallyUnsold ? contractBalance : theoreticallyUnsold;
+    function _currentCumulativeUsdPerEth() internal view returns (uint256) {
+        uint32 obsTimestamp = _lastObservation.timestamp;
+        if (obsTimestamp == 0) {
+            return 0;
         }
-
-        if (unsold == 0) revert TransferFailed();
-
-        bool success = soundCoin.transfer(to, unsold);
-        if (!success) revert TransferFailed();
-
-        emit WithdrawTokens(unsold);
+        return _lastObservation.priceCumulativeUsdPerEth
+            + _spotUsdPerEth() * (block.timestamp - obsTimestamp);
     }
 
-    function getRemainingAllowance() external view returns (uint256) {
-        return soundCoin.allowance(tokenWallet, address(this));
-    }
-
-    receive() external payable {
-        buyTokens();
+    function _updateOracle() internal {
+        _lastObservation = PriceObservation({
+            priceCumulativeUsdPerEth: _currentCumulativeUsdPerEth(),
+            timestamp: uint32(block.timestamp)
+        });
     }
 }

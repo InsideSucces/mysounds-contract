@@ -54,6 +54,9 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
     /// @dev Cycle ID -> Withdrawn status
     mapping(uint256 => bool) public tokensWithdrawn;
 
+    /// @notice Total tokens locked per cycle (for scoped admin withdrawal)
+    mapping(uint256 => uint256) private cycleTotalLocked;
+
     // --- Events ---
 
     /// @notice Emitted when a new artist is registered
@@ -81,6 +84,7 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
 
     /// @dev Checks if voting has ended
     modifier onlyAfterVoting() {
+        require(votingEnd != 0, "Voting window not set");
         require(block.timestamp > votingEnd, "Voting is still active");
         _;
     }
@@ -139,14 +143,14 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
      */
     function withdrawTokens() external onlyOwner onlyAfterVoting nonReentrant {
         require(!tokensWithdrawn[votingCycle], "Tokens already withdrawn for this cycle");
-        
-        uint256 contractBalance = voteToken.balanceOf(address(this));
-        require(contractBalance > 0, "No tokens to withdraw");
+
+        uint256 amount = cycleTotalLocked[votingCycle];
+        require(amount > 0, "No tokens to withdraw");
 
         tokensWithdrawn[votingCycle] = true;
-        voteToken.safeTransfer(msg.sender, contractBalance);
+        voteToken.safeTransfer(msg.sender, amount);
 
-        emit TokensWithdrawn(votingCycle, msg.sender, contractBalance);
+        emit TokensWithdrawn(votingCycle, msg.sender, amount);
     }
 
     /**
@@ -154,10 +158,11 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
      * @dev Should be called after the previous cycle is complete and tokens withdrawn (optional but recommended).
      */
     function startNewVotingCycle() external onlyOwner {
-        // Optional: Require previous voting to be ended? 
-        // We allow force restart, but best practice is to ensure closure. 
-        // For flexibility, we just increment.
-        
+        require(
+            tokensWithdrawn[votingCycle] || cycleTotalLocked[votingCycle] == 0,
+            "Withdraw previous cycle first"
+        );
+
         votingCycle++;
         
         // Reset window to avoid accidental open voting
@@ -175,18 +180,19 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
      * @param _amount The amount of tokens to vote (1 Token = 1 Vote)
      */
     function vote(uint256 _artistId, uint256 _amount) external onlyDuringVoting nonReentrant {
-        require(artists[votingCycle][_artistId].exists, "Artist does not exist");
+        uint256 cycle = votingCycle;
+        Artist storage artist = artists[cycle][_artistId];
+        require(artist.exists, "Artist does not exist");
         require(_amount > 0, "Vote amount must be greater than 0");
 
-        // Transfer tokens from user to contract
         voteToken.safeTransferFrom(msg.sender, address(this), _amount);
 
-        // Update stats
-        artists[votingCycle][_artistId].totalVotes += _amount;
-        userVotes[votingCycle][msg.sender][_artistId] += _amount;
-        totalUserLocked[votingCycle][msg.sender] += _amount;
+        artist.totalVotes += _amount;
+        userVotes[cycle][msg.sender][_artistId] += _amount;
+        totalUserLocked[cycle][msg.sender] += _amount;
+        cycleTotalLocked[cycle] += _amount;
 
-        emit VoteCast(votingCycle, msg.sender, _artistId, _amount);
+        emit VoteCast(cycle, msg.sender, _artistId, _amount);
     }
 
     // --- View / Analytics Functions ---

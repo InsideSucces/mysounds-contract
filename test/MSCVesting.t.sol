@@ -272,4 +272,32 @@ contract MSCVestingTest is Test {
         
         assertEq(msc.balanceOf(address(vesting)), initialBalance + depositAmount);
     }
+
+    function test_CannotShortenVestingDurationAfterAllocations() public {
+        uint256 amount = 1_000_000 * 10**18;
+        vesting.createVestingSchedule(beneficiary1, TEAM_CATEGORY, amount, block.timestamp);
+
+        vm.expectRevert("Cannot shorten vesting duration");
+        vesting.updateVestingCategory(TEAM_CATEGORY, "Team", 75_000_000 * 10**18, 365 days, 1000 days);
+    }
+
+    function test_CannotExtendCliffAfterAllocations() public {
+        uint256 amount = 1_000_000 * 10**18;
+        vesting.createVestingSchedule(beneficiary1, TEAM_CATEGORY, amount, block.timestamp);
+
+        vm.expectRevert("Cannot extend cliff duration");
+        vesting.updateVestingCategory(TEAM_CATEGORY, "Team", 75_000_000 * 10**18, 400 days, 1460 days);
+    }
+
+    function test_VestedNeverExceedsTotalAllocated() public {
+        uint256 amount = 1_000_000 * 10**18;
+        uint256 startTime = block.timestamp;
+
+        vesting.createVestingSchedule(beneficiary1, TEAM_CATEGORY, amount, startTime);
+
+        vm.warp(startTime + 730 days);
+
+        uint256 claimable = vesting.getClaimableAmount(beneficiary1);
+        assertLe(claimable, amount);
+    }
 }

@@ -108,14 +108,20 @@ contract MSCVesting is Ownable, ReentrancyGuard {
         uint256 cliff,
         uint256 duration
     ) external onlyOwner {
-        require(categories[categoryId].exists, "Category does not exist");
+        Category storage category = categories[categoryId];
+        require(category.exists, "Category does not exist");
         require(duration > cliff, "Duration must be greater than cliff");
-        require(cap >= categories[categoryId].totalAllocated, "Cap below allocated");
+        require(cap >= category.totalAllocated, "Cap below allocated");
 
-        categories[categoryId].name = name;
-        categories[categoryId].allocationCap = cap;
-        categories[categoryId].cliffDuration = cliff;
-        categories[categoryId].vestingDuration = duration;
+        if (category.totalAllocated > 0) {
+            require(duration >= category.vestingDuration, "Cannot shorten vesting duration");
+            require(cliff <= category.cliffDuration, "Cannot extend cliff duration");
+        }
+
+        category.name = name;
+        category.allocationCap = cap;
+        category.cliffDuration = cliff;
+        category.vestingDuration = duration;
 
         emit CategoryUpdated(categoryId, name, cap, cliff, duration);
     }
@@ -205,31 +211,35 @@ contract MSCVesting is Ownable, ReentrancyGuard {
         require(schedule.totalAllocated > 0, "No schedule found");
         require(!schedule.revoked, "Already revoked");
 
+        uint256 totalAllocated = schedule.totalAllocated;
+        uint256 claimed = schedule.claimed;
+        bytes32 categoryId = schedule.categoryId;
+
         uint256 vested = _calculateVestedAmount(beneficiary);
-        uint256 claimable = vested - schedule.claimed;
-        
-        // Transfer MSC
-        mscToken.safeTransfer(beneficiary, claimable);
-        // Burn vMSC
-        vmscToken.burn(beneficiary, claimable);
-        
-        // Update total outstanding
-        totalOutstandingMSC -= claimable;
+        uint256 claimable;
+        unchecked {
+            claimable = vested - claimed;
+        }
 
         if (claimable > 0) {
-            schedule.claimed += claimable;
+            mscToken.safeTransfer(beneficiary, claimable);
+            vmscToken.burn(beneficiary, claimable);
+            totalOutstandingMSC -= claimable;
+            schedule.claimed = claimed + claimable;
             emit TokensClaimed(beneficiary, claimable);
         }
 
-        uint256 unvested = schedule.totalAllocated - vested;
+        uint256 unvested;
+        unchecked {
+            unvested = totalAllocated - vested;
+        }
         
         // Mark as revoked
         schedule.revoked = true;
         // Reduce their total allocation to what was actually vested, effectively removing the unvested part
         schedule.totalAllocated = vested;
         
-        // Update category total allocated
-        Category storage category = categories[schedule.categoryId];
+        Category storage category = categories[categoryId];
         category.totalAllocated -= unvested;
 
         // Burn the unvested vMSC
@@ -249,26 +259,24 @@ contract MSCVesting is Ownable, ReentrancyGuard {
     function claim() external nonReentrant {
         VestingSchedule storage schedule = schedules[msg.sender];
         require(schedule.totalAllocated > 0, "No schedule found");
-        require(!schedule.revoked, "Schedule revoked"); 
+        require(!schedule.revoked, "Schedule revoked");
 
         uint256 vested = _calculateVestedAmount(msg.sender);
-        uint256 claimable = vested - schedule.claimed;
+        uint256 claimed = schedule.claimed;
+        uint256 claimable;
+        unchecked {
+            claimable = vested - claimed;
+        }
 
         require(claimable > 0, "Nothing to claim");
 
-        schedule.claimed += claimable;
-        
-        // Transfer MSC
+        schedule.claimed = claimed + claimable;
         mscToken.safeTransfer(msg.sender, claimable);
-        
-        // Burn vMSC
         vmscToken.burn(msg.sender, claimable);
-        
-        // Update total outstanding
         totalOutstandingMSC -= claimable;
 
         emit TokensClaimed(msg.sender, claimable);
-        }
+    }
 
     // --- View Functions ---
 
@@ -299,27 +307,22 @@ contract MSCVesting is Ownable, ReentrancyGuard {
         }
 
         Category storage category = categories[schedule.categoryId];
-        
-        if (block.timestamp < schedule.startTime + category.cliffDuration) {
+        uint256 cliffDuration = category.cliffDuration;
+        uint256 vestingDuration = category.vestingDuration;
+        uint256 startTime = schedule.startTime;
+        uint256 totalAllocated = schedule.totalAllocated;
+
+        if (block.timestamp < startTime + cliffDuration) {
             return 0;
         }
 
-        if (block.timestamp >= schedule.startTime + category.vestingDuration) {
-            return schedule.totalAllocated;
+        if (block.timestamp >= startTime + vestingDuration) {
+            return totalAllocated;
         }
 
-        // Linear vesting: (time_passed_since_start / total_duration) * amount
-        // Note: Some models do (time_since_cliff / (duration - cliff)) * amount
-        // "Linear vesting after cliff" usually means 0 before cliff, then it jumps to the proportional amount or starts from 0?
-        // Requirement: "No vesting occurs before the cliff", "Vesting unlocks linearly after the cliff". 
-        // Interpretation 1: At cliff, 0% is vested, then it goes 0->100% over (duration - cliff).
-        // Interpretation 2: At cliff, (cliff/duration)% is instantly vested (Proportional), then continues.
-        // "1-year cliff, 4-year total vesting" usually implies the standard "cliff + monthly/linear" model where at cliff you get the chunks accumulated during cliff.
-        // Let's assume standard Model: Vested = Total * (TimePassed / TotalDuration). 
-        // Return 0 if TimePassed < Cliff.
-        
-        uint256 timeSinceStart = block.timestamp - schedule.startTime;
-        return (schedule.totalAllocated * timeSinceStart) / category.vestingDuration;
+        uint256 timeSinceStart = block.timestamp - startTime;
+        uint256 vested = (totalAllocated * timeSinceStart) / vestingDuration;
+        return vested > totalAllocated ? totalAllocated : vested;
     }
 
     function totalLockedMSC() public view returns (uint256) {
