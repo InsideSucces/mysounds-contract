@@ -32,8 +32,8 @@ contract MSCVestingTest is Test {
         // Transfer vMSC ownership to vesting
         vmsc.transferOwnership(address(vesting));
 
-        // Fund vesting contract
-        msc.mint(address(vesting), 200_000_000 * 10**18); // Fund for Team + Investors (100M total needed)
+        // Fund vesting contract from constructor mint (500M to deployer)
+        msc.transfer(address(vesting), 200_000_000 * 10**18);
 
         // Create Team Category
         // Cap: 75M, Cliff: 1 year (365 days), Duration: 4 years (1460 days)
@@ -264,7 +264,7 @@ contract MSCVestingTest is Test {
 
     function test_Deposit() public {
         uint256 depositAmount = 50_000_000 * 10**18;
-        msc.mint(owner, depositAmount);
+        // Owner already holds remaining supply from constructor mint
         msc.approve(address(vesting), depositAmount);
         
         uint256 initialBalance = msc.balanceOf(address(vesting));

@@ -33,9 +33,9 @@ contract DeployVestingSepolia is Script {
         vmsc.transferOwnership(address(vesting));
         console.log("vMSC ownership transferred to NEW Vesting contract");
 
-        // 5. Fund Vesting Contract with MSC using NEW deposit function
+        // 5. Fund Vesting Contract with MSC from deployer balance (fixed-supply token)
         uint256 fundingAmount = 100_000_000 * 10 ** 18;
-        msc.mint(deployerAddress, fundingAmount);
+        require(msc.balanceOf(deployerAddress) >= fundingAmount, "Insufficient MSC balance to fund vesting");
         msc.approve(address(vesting), fundingAmount);
         vesting.deposit(fundingAmount);
         console.log("MSCVesting funded with", fundingAmount / 10 ** 18, "MSC via deposit");
