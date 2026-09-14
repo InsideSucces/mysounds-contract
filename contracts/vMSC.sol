@@ -7,42 +7,24 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 /**
  * @title vMSC (Vesting Sound Coin)
  * @notice Represents locked/vesting MSC tokens.
- * @dev Non-transferable token. Can only be minted and burned by the owner (Vesting Contract).
+ * @dev Non-transferable. Mint/burn only by owner (MSCVesting). Transfers blocked via `_update`.
  */
 contract vMSC is ERC20, Ownable {
+    error NonTransferable();
+
     constructor() ERC20("Vesting Sound Coin", "vMSC") Ownable(msg.sender) {}
 
-    /**
-     * @notice Mints vMSC tokens to a user.
-     * @dev Only callable by the owner (Vesting Contract).
-     * @param to The address to mint tokens to.
-     * @param amount The amount of tokens to mint.
-     */
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
 
-    /**
-     * @notice Burns vMSC tokens from a user.
-     * @dev Only callable by the owner (Vesting Contract).
-     * @param from The address to burn tokens from.
-     * @param amount The amount of tokens to burn.
-     */
     function burn(address from, uint256 amount) external onlyOwner {
         _burn(from, amount);
     }
 
-    /**
-     * @notice Overrides transfer function to prevent transfers.
-     */
-    function transfer(address, uint256) public pure override returns (bool) {
-        revert("vMSC: Non-transferable");
-    }
-
-    /**
-     * @notice Overrides transferFrom function to prevent transfers.
-     */
-    function transferFrom(address, address, uint256) public pure override returns (bool) {
-        revert("vMSC: Non-transferable");
+    /// @dev Blocks all peer-to-peer transfers; mint (from=0) and burn (to=0) remain allowed.
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0) && to != address(0)) revert NonTransferable();
+        super._update(from, to, value);
     }
 }

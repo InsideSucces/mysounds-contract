@@ -8,29 +8,19 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title MusicArtistVoting
- * @dev A voting contract for music artists where users vote by locking ERC-20 tokens.
- * 1 Token = 1 Vote Weight.
- * Supports multiple voting cycles.
- * Tokens are locked in the contract and can be withdrawn by the admin after voting ends.
+ * @dev Voting contract where users lock ERC-20 tokens (1 token = 1 vote weight).
+ * Supports multiple voting cycles. After a cycle ends, voters reclaim their own
+ * locked tokens. Admin may only withdraw excess tokens not owed to voters.
  */
 contract MusicArtistVoting is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // --- State Variables ---
-
-    /// @notice The ERC-20 token used for voting
     IERC20 public immutable voteToken;
 
-    /// @notice Current voting cycle ID
     uint256 public votingCycle;
-
-    /// @notice Voting start timestamp for the current cycle
     uint256 public votingStart;
-
-    /// @notice Voting end timestamp for the current cycle
     uint256 public votingEnd;
 
-    /// @notice Struct representing a music artist
     struct Artist {
         uint256 id;
         string name;
@@ -38,78 +28,40 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
         uint256 totalVotes;
     }
 
-    /// @notice Mapping from Cycle ID -> Artist ID -> Artist details
     mapping(uint256 => mapping(uint256 => Artist)) public artists;
-
-    /// @notice Mapping from Cycle ID -> List of registered artist IDs
     mapping(uint256 => uint256[]) public artistIds;
-
-    /// @notice Mapping from Cycle ID -> User Address -> Artist ID -> Vote Weight
     mapping(uint256 => mapping(address => mapping(uint256 => uint256))) public userVotes;
-
-    /// @notice Mapping from Cycle ID -> User Address -> Total tokens locked
     mapping(uint256 => mapping(address => uint256)) public totalUserLocked;
-
-    /// @notice Flag to prevent double withdrawal by admin for the current cycle
-    /// @dev Cycle ID -> Withdrawn status
-    mapping(uint256 => bool) public tokensWithdrawn;
-
-    /// @notice Total tokens locked per cycle (for scoped admin withdrawal)
     mapping(uint256 => uint256) private cycleTotalLocked;
+    /// @notice Tokens still owed to voters for a cycle (locked - reclaimed).
+    mapping(uint256 => uint256) public cycleOutstanding;
 
-    // --- Events ---
-
-    /// @notice Emitted when a new artist is registered
     event ArtistAdded(uint256 indexed cycleId, uint256 indexed artistId, string name);
-
-    /// @notice Emitted when a vote is cast
     event VoteCast(uint256 indexed cycleId, address indexed voter, uint256 indexed artistId, uint256 weight);
-
-    /// @notice Emitted when the voting window is set
     event VotingWindowSet(uint256 indexed cycleId, uint256 startTime, uint256 endTime);
-
-    /// @notice Emitted when tokens are withdrawn by admin
-    event TokensWithdrawn(uint256 indexed cycleId, address indexed admin, uint256 amount);
-
-    /// @notice Emitted when a new voting cycle is started
+    event TokensReclaimed(uint256 indexed cycleId, address indexed voter, uint256 amount);
+    event ExcessTokensWithdrawn(uint256 indexed cycleId, address indexed admin, uint256 amount);
     event NewVotingCycleStarted(uint256 indexed newCycleId);
 
-    // --- Modifiers ---
-
-    /// @dev Checks if voting is currently active based on timestamps
     modifier onlyDuringVoting() {
-        require(block.timestamp >= votingStart && block.timestamp <= votingEnd, "Voting is not active");
+        require(
+            votingStart != 0 && block.timestamp >= votingStart && block.timestamp <= votingEnd,
+            "Voting is not active"
+        );
         _;
     }
 
-    /// @dev Checks if voting has ended
-    modifier onlyAfterVoting() {
-        require(votingEnd != 0, "Voting window not set");
-        require(block.timestamp > votingEnd, "Voting is still active");
-        _;
-    }
-
-    // --- Constructor ---
-
-    /**
-     * @param _voteToken Address of the ERC-20 token used for voting
-     */
     constructor(address _voteToken) Ownable(msg.sender) {
         require(_voteToken != address(0), "Invalid token address");
         voteToken = IERC20(_voteToken);
-        votingCycle = 1; // Start with cycle 1
+        votingCycle = 1;
     }
 
-    // --- Admin Functions ---
-
-    /**
-     * @notice Register a new artist for the current cycle.
-     * @param _artistId Unique ID for the artist
-     * @param _name Name of the artist
-     */
     function registerArtist(uint256 _artistId, string memory _name) external onlyOwner {
         require(!artists[votingCycle][_artistId].exists, "Artist ID already exists in this cycle");
         require(bytes(_name).length > 0, "Artist name cannot be empty");
+        // Prevent mid-vote artist injection that could dilute / redirect votes.
+        require(votingEnd == 0 || block.timestamp < votingStart, "Cannot register during or after voting");
 
         artists[votingCycle][_artistId] = Artist({
             id: _artistId,
@@ -119,18 +71,17 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
         });
 
         artistIds[votingCycle].push(_artistId);
-
         emit ArtistAdded(votingCycle, _artistId, _name);
     }
 
-    /**
-     * @notice Set the start and end time for the current voting cycle.
-     * @param _startTime Timestamp when voting starts
-     * @param _endTime Timestamp when voting ends
-     */
     function setVotingWindow(uint256 _startTime, uint256 _endTime) external onlyOwner {
         require(_endTime > _startTime, "End time must be after start time");
         require(_endTime > block.timestamp, "End time must be in future");
+        // Prevent shortening an active window to force early reclaim / grief voters.
+        if (votingStart != 0 && block.timestamp >= votingStart && block.timestamp <= votingEnd) {
+            require(_startTime == votingStart, "Cannot change start during voting");
+            require(_endTime >= votingEnd, "Cannot shorten active voting window");
+        }
 
         votingStart = _startTime;
         votingEnd = _endTime;
@@ -139,46 +90,52 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Withdraw all locked tokens to the admin address after voting ends.
+     * @notice Voters reclaim their locked tokens after that cycle's voting ends.
+     * @param _cycleId Cycle to reclaim from (0 = current cycle).
      */
-    function withdrawTokens() external onlyOwner onlyAfterVoting nonReentrant {
-        require(!tokensWithdrawn[votingCycle], "Tokens already withdrawn for this cycle");
+    function reclaimTokens(uint256 _cycleId) external nonReentrant {
+        uint256 cycle = _cycleId == 0 ? votingCycle : _cycleId;
+        require(cycle > 0 && cycle <= votingCycle, "Invalid cycle");
 
-        uint256 amount = cycleTotalLocked[votingCycle];
-        require(amount > 0, "No tokens to withdraw");
+        if (cycle == votingCycle) {
+            require(votingEnd != 0, "Voting window not set");
+            require(block.timestamp > votingEnd, "Voting is still active");
+        }
 
-        tokensWithdrawn[votingCycle] = true;
+        uint256 amount = totalUserLocked[cycle][msg.sender];
+        require(amount > 0, "Nothing to reclaim");
+
+        totalUserLocked[cycle][msg.sender] = 0;
+        cycleOutstanding[cycle] -= amount;
+
         voteToken.safeTransfer(msg.sender, amount);
-
-        emit TokensWithdrawn(votingCycle, msg.sender, amount);
+        emit TokensReclaimed(cycle, msg.sender, amount);
     }
 
     /**
-     * @notice Start a new voting cycle, effectively clearing all artists and votes.
-     * @dev Should be called after the previous cycle is complete and tokens withdrawn (optional but recommended).
+     * @notice Withdraw only tokens not owed to voters (e.g. mistaken transfers).
      */
+    function withdrawExcessTokens(address to) external onlyOwner nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        uint256 totalOwed = _totalOutstandingAllCycles();
+        uint256 balance = voteToken.balanceOf(address(this));
+        require(balance > totalOwed, "No excess tokens");
+        uint256 excess = balance - totalOwed;
+        voteToken.safeTransfer(to, excess);
+        emit ExcessTokensWithdrawn(votingCycle, to, excess);
+    }
+
     function startNewVotingCycle() external onlyOwner {
-        require(
-            tokensWithdrawn[votingCycle] || cycleTotalLocked[votingCycle] == 0,
-            "Withdraw previous cycle first"
-        );
+        require(votingEnd != 0, "Voting window not set");
+        require(block.timestamp > votingEnd, "Voting is still active");
 
         votingCycle++;
-        
-        // Reset window to avoid accidental open voting
         votingStart = 0;
         votingEnd = 0;
 
         emit NewVotingCycleStarted(votingCycle);
     }
 
-    // --- User Functions ---
-
-    /**
-     * @notice Vote for an artist by locking tokens.
-     * @param _artistId The ID of the artist to vote for
-     * @param _amount The amount of tokens to vote (1 Token = 1 Vote)
-     */
     function vote(uint256 _artistId, uint256 _amount) external onlyDuringVoting nonReentrant {
         uint256 cycle = votingCycle;
         Artist storage artist = artists[cycle][_artistId];
@@ -191,30 +148,25 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
         userVotes[cycle][msg.sender][_artistId] += _amount;
         totalUserLocked[cycle][msg.sender] += _amount;
         cycleTotalLocked[cycle] += _amount;
+        cycleOutstanding[cycle] += _amount;
 
         emit VoteCast(cycle, msg.sender, _artistId, _amount);
     }
 
-    // --- View / Analytics Functions ---
-
-    /**
-     * @notice Get details of a specific artist in the current cycle.
-     */
-    function getArtist(uint256 _artistId) external view returns (uint256 id, string memory name, bool exists, uint256 totalVotes) {
+    function getArtist(uint256 _artistId)
+        external
+        view
+        returns (uint256 id, string memory name, bool exists, uint256 totalVotes)
+    {
         Artist memory artist = artists[votingCycle][_artistId];
         return (artist.id, artist.name, artist.exists, artist.totalVotes);
     }
 
-    /**
-     * @notice Get the leading artist(s) for the current cycle.
-     * @dev Returns an array of leaders in case of a tie.
-     */
     function getLeadingArtist() external view returns (Artist[] memory leaders) {
         uint256[] memory currentIds = artistIds[votingCycle];
         uint256 highestVotes = 0;
         uint256 leaderCount = 0;
 
-        // First pass: find highest vote count
         for (uint256 i = 0; i < currentIds.length; i++) {
             uint256 votes = artists[votingCycle][currentIds[i]].totalVotes;
             if (votes > highestVotes) {
@@ -225,12 +177,10 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
             }
         }
 
-        // If no votes or no artists, return empty
         if (highestVotes == 0) {
             return new Artist[](0);
         }
 
-        // Second pass: fill leaders array
         leaders = new Artist[](leaderCount);
         uint256 currentIndex = 0;
         for (uint256 i = 0; i < currentIds.length; i++) {
@@ -243,38 +193,25 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
         return leaders;
     }
 
-    /**
-     * @notice Get all artists registered in the current cycle.
-     */
     function getAllArtists() external view returns (Artist[] memory) {
         uint256[] memory ids = artistIds[votingCycle];
         Artist[] memory allArtists = new Artist[](ids.length);
-        
         for (uint256 i = 0; i < ids.length; i++) {
             allArtists[i] = artists[votingCycle][ids[i]];
         }
         return allArtists;
     }
 
-    /**
-     * @notice Get the leaderboard for a specific cycle (or current if 0 passed).
-     * @param _cycleId The cycle ID to get leaderboard for (0 for current).
-     */
     function getLeaderboard(uint256 _cycleId) external view returns (Artist[] memory) {
         uint256 targetCycle = _cycleId == 0 ? votingCycle : _cycleId;
         uint256[] memory ids = artistIds[targetCycle];
         uint256 length = ids.length;
-        
+
         Artist[] memory leaderboard = new Artist[](length);
-        
-        // Populate array
         for (uint256 i = 0; i < length; i++) {
             leaderboard[i] = artists[targetCycle][ids[i]];
         }
 
-        // Sort by totalVotes descending (Bubble Sort)
-        // Note: For large numbers of artists, off-chain indexing is preferred. 
-        // But for < 100 artists, this is acceptable for view functions.
         for (uint256 i = 0; i < length; i++) {
             for (uint256 j = 0; j < length - 1 - i; j++) {
                 if (leaderboard[j].totalVotes < leaderboard[j + 1].totalVotes) {
@@ -284,14 +221,18 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
                 }
             }
         }
-        
+
         return leaderboard;
     }
 
-    /**
-     * @notice Check if the voting period is currently active.
-     */
     function isVotingActive() external view returns (bool) {
-        return block.timestamp >= votingStart && block.timestamp <= votingEnd;
+        return votingStart != 0 && block.timestamp >= votingStart && block.timestamp <= votingEnd;
+    }
+
+    function _totalOutstandingAllCycles() internal view returns (uint256 total) {
+        // Outstanding is tracked per cycle; sum through current cycle.
+        for (uint256 i = 1; i <= votingCycle; i++) {
+            total += cycleOutstanding[i];
+        }
     }
 }

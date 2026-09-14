@@ -63,8 +63,17 @@ contract PresaleTest is Test {
         vm.prank(owner);
         presale.depositTokens(ALLOCATION);
 
-        // Start presale
+        // Enter presale window, then prime TWAP for TWAP_PERIOD
         vm.warp(presaleStartTime + 1);
+        ethUsdPair.sync();
+        presale.updateOracle();
+        vm.warp(block.timestamp + 30 minutes);
+    }
+
+    function _primeOracle(Presale target) internal {
+        ethUsdPair.sync();
+        target.updateOracle();
+        vm.warp(block.timestamp + 30 minutes);
     }
 
     function test_ConstructorSetsValuesCorrectly() public view {
@@ -151,7 +160,6 @@ contract PresaleTest is Test {
     }
 
     function test_BuyTokens_NotEnoughTokensInContract() public {
-        // Create new underfunded presale
         Presale underfunded = new Presale(
             address(soundCoin),
             block.timestamp + 1,
@@ -160,17 +168,14 @@ contract PresaleTest is Test {
             address(usdToken)
         );
 
-        // Owner of the new contract is THIS test contract
-        vm.prank(address(this)); // ← critical!
         underfunded.setTokenWallet(tokenWallet);
 
-        // Deposit only 100 tokens
         vm.prank(tokenWallet);
         soundCoin.approve(address(underfunded), 100);
-        vm.prank(address(this));
         underfunded.depositTokens(100);
 
         vm.warp(block.timestamp + 1 hours);
+        _primeOracle(underfunded);
 
         vm.deal(buyer1, 1 ether);
         vm.prank(buyer1);
@@ -242,27 +247,46 @@ contract PresaleTest is Test {
     }
 
     function test_TwapPriceResistsSingleBlockManipulation() public {
-        vm.deal(buyer1, 10 ether);
-        vm.deal(buyer2, 10 ether);
-        vm.deal(address(0xBEEF), 10 ether);
-
-        vm.prank(buyer1);
-        presale.buyTokens{value: 1 ether}();
-
-        vm.warp(block.timestamp + 31 minutes);
-        vm.prank(buyer2);
-        presale.buyTokens{value: 1 ether}();
-        assertApproxEqAbs(soundCoin.balanceOf(buyer2), 2000 * 1e18, 300 * 1e18);
-
+        // Manipulate spot after a healthy TWAP window was established in setUp.
         ethUsdPair.setReserves(uint112(1), uint112(1_000_000 ether));
 
-        vm.warp(block.timestamp + 31 minutes);
-        ethUsdPair.setReserves(uint112(1000 ether), uint112(2_000_000 * 1e6));
-
-        vm.prank(address(0xBEEF));
+        vm.deal(buyer1, 10 ether);
+        vm.prank(buyer1);
+        // Immediate buy must still use prior TWAP (~$2000), not the manipulated spot.
         presale.buyTokens{value: 1 ether}();
-        assertApproxEqAbs(soundCoin.balanceOf(address(0xBEEF)), 2000 * 1e18, 300 * 1e18);
-        assertLt(soundCoin.balanceOf(address(0xBEEF)), 100_000 * 1e18);
+        assertApproxEqAbs(soundCoin.balanceOf(buyer1), 2000 * 1e18, 300 * 1e18);
+        assertLt(soundCoin.balanceOf(buyer1), 100_000 * 1e18);
+    }
+
+    function test_BuyRevertsIfOracleNotReady() public {
+        Presale fresh = new Presale(
+            address(soundCoin),
+            block.timestamp,
+            block.timestamp + 7 days,
+            address(ethUsdPair),
+            address(usdToken)
+        );
+        vm.deal(buyer1, 1 ether);
+        vm.prank(buyer1);
+        vm.expectRevert(Presale.OracleNotReady.selector);
+        fresh.buyTokens{value: 1 ether}();
+    }
+
+    function test_BuyRevertsIfTwapPeriodNotElapsed() public {
+        Presale fresh = new Presale(
+            address(soundCoin),
+            block.timestamp,
+            block.timestamp + 7 days,
+            address(ethUsdPair),
+            address(usdToken)
+        );
+        ethUsdPair.sync();
+        fresh.updateOracle();
+
+        vm.deal(buyer1, 1 ether);
+        vm.prank(buyer1);
+        vm.expectRevert(Presale.TwapPeriodNotElapsed.selector);
+        fresh.buyTokens{value: 1 ether}();
     }
 
     function test_DepositTokens_RequiresApproval() public {

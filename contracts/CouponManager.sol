@@ -10,7 +10,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract CouponManager is EIP712, Ownable, Pausable, ReentrancyGuard {
-    using ECDSA for bytes32;
     using SafeERC20 for IERC20;
 
     IERC20 public immutable soundCoin;
@@ -30,6 +29,7 @@ contract CouponManager is EIP712, Ownable, Pausable, ReentrancyGuard {
     error UnauthorizedSigner();
     error ZeroAddress();
     error InsufficientContractBalance();
+    error ZeroAmount();
 
     constructor(address _soundCoin, address _initialSigner) 
         EIP712("CouponManager", "1") 
@@ -47,6 +47,7 @@ contract CouponManager is EIP712, Ownable, Pausable, ReentrancyGuard {
         uint256 deadline,
         bytes calldata signature
     ) external whenNotPaused nonReentrant {
+        if (amount == 0) revert ZeroAmount();
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (nonce != nonces[msg.sender]) revert InvalidSignature();
 
@@ -54,13 +55,14 @@ contract CouponManager is EIP712, Ownable, Pausable, ReentrancyGuard {
             abi.encode(COUPON_TYPEHASH, msg.sender, amount, nonce, deadline)
         );
         bytes32 hash = _hashTypedDataV4(structHash);
-        address signer = hash.recover(signature);
+        address signer = ECDSA.recover(hash, signature);
 
-        if (!authorizedSigners[signer]) revert UnauthorizedSigner();
+        if (signer == address(0) || !authorizedSigners[signer]) revert UnauthorizedSigner();
         if (soundCoin.balanceOf(address(this)) < amount) revert InsufficientContractBalance();
 
-        nonces[msg.sender]++;
-        
+        // Effects before interactions
+        nonces[msg.sender] = nonce + 1;
+
         soundCoin.safeTransfer(msg.sender, amount);
 
         emit CouponRedeemed(msg.sender, amount, nonce);
@@ -72,8 +74,9 @@ contract CouponManager is EIP712, Ownable, Pausable, ReentrancyGuard {
         emit SignerStatusChanged(signer, status);
     }
 
-    function emergencyWithdraw(address to, uint256 amount) external onlyOwner {
+    function emergencyWithdraw(address to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
         soundCoin.safeTransfer(to, amount);
     }
 

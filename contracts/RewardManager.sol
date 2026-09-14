@@ -51,6 +51,7 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
 
     // Administrative functions
     function setBaseRate(uint256 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newRate == 0) revert InvalidMultiplier(newRate);
         RewardStorage.Layout storage s = RewardStorage.layout();
         emit RewardRateUpdated(s.baseRate, newRate);
         s.baseRate = newRate;
@@ -120,15 +121,22 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         if (block.timestamp < last + _minInterval(action)) {
             revert TooSoonForAction(user, uint256(action), last, block.timestamp, _minInterval(action));
         }
-        s.lastActionTimestamp[user][uint256(action)] = block.timestamp;
-        s.lastActionMetadata[user][uint256(action)] = metadata;
+
+        // Compute payout before mutating throttle state so empty-pool calls do not burn the interval.
+        uint256 amount = getEffectiveReward(action);
 
         if (action == Action.SIGNUP) {
             s.hasSignedUp[user] = true;
             s.totalUsers += 1;
+            s.lastActionTimestamp[user][uint256(action)] = block.timestamp;
+            s.lastActionMetadata[user][uint256(action)] = metadata;
+            // Signup still records even if amount is 0 (allocation exhausted).
+        } else {
+            if (amount == 0) return;
+            s.lastActionTimestamp[user][uint256(action)] = block.timestamp;
+            s.lastActionMetadata[user][uint256(action)] = metadata;
         }
 
-        uint256 amount = getEffectiveReward(action);
         if (amount == 0) return;
 
         // cap by remaining allocation
@@ -163,7 +171,8 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
     }
 
     // emergency withdrawal by admin (non-rewarded tokens only if over-allocated etc.)
-    function emergencyWithdraw(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function emergencyWithdraw(address to, uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (to == address(0)) revert NullAddress(to);
         RewardStorage.Layout storage s = RewardStorage.layout();
         uint256 bal = IERC20(s.token).balanceOf(address(this));
         uint256 allocLeft = s.totalRewardSupply > s.totalDistributed
@@ -173,6 +182,15 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         uint256 withdrawable = bal - reserved;
         require(amount <= withdrawable, "insufficient balance");
         IERC20(s.token).safeTransfer(to, amount);
+    }
+
+    /// @notice Recover ETH accidentally sent to this contract.
+    function withdrawETH(address payable to) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (to == address(0)) revert NullAddress(to);
+        uint256 bal = address(this).balance;
+        require(bal > 0, "no eth");
+        (bool ok,) = to.call{value: bal}("");
+        require(ok, "eth transfer failed");
     }
 
     function _onlyBackend() internal view {

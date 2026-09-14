@@ -54,6 +54,7 @@ contract MSCVesting is Ownable, ReentrancyGuard {
     event TokensClaimed(address indexed beneficiary, uint256 amount);
     event Revoked(address indexed beneficiary, uint256 refundAmount);
     event TokensDeposited(address indexed admin, uint256 amount);
+    event ExcessWithdrawn(address indexed to, uint256 amount);
 
     // --- Constructor ---
 
@@ -136,6 +137,18 @@ contract MSCVesting is Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Withdraw MSC not backing outstanding vesting schedules (e.g. after revokes).
+     */
+    function withdrawExcess(address to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        require(amount > 0, "Amount must be > 0");
+        uint256 balance = mscToken.balanceOf(address(this));
+        require(balance >= totalOutstandingMSC + amount, "Insufficient excess");
+        mscToken.safeTransfer(to, amount);
+        emit ExcessWithdrawn(to, amount);
+    }
+
+    /**
      * @notice Deletes a vesting category. Only possible if no tokens have been allocated.
      */
     function deleteVestingCategory(bytes32 categoryId) external onlyOwner {
@@ -170,7 +183,7 @@ contract MSCVesting is Ownable, ReentrancyGuard {
         bytes32 categoryId,
         uint256 amount,
         uint256 startTime
-    ) external onlyOwner {
+    ) external onlyOwner nonReentrant {
         require(beneficiary != address(0), "Invalid beneficiary");
         require(amount > 0, "Amount must be > 0");
         require(categories[categoryId].exists, "Category does not exist");
@@ -206,7 +219,7 @@ contract MSCVesting is Ownable, ReentrancyGuard {
      * and refunds the rest to the owner/contract or just marks it as revoked.
      * The requirement said "Revoke unvested tokens".
      */
-    function revoke(address beneficiary) external onlyOwner {
+    function revoke(address beneficiary) external onlyOwner nonReentrant {
         VestingSchedule storage schedule = schedules[beneficiary];
         require(schedule.totalAllocated > 0, "No schedule found");
         require(!schedule.revoked, "Already revoked");
@@ -221,32 +234,30 @@ contract MSCVesting is Ownable, ReentrancyGuard {
             claimable = vested - claimed;
         }
 
-        if (claimable > 0) {
-            mscToken.safeTransfer(beneficiary, claimable);
-            vmscToken.burn(beneficiary, claimable);
-            totalOutstandingMSC -= claimable;
-            schedule.claimed = claimed + claimable;
-            emit TokensClaimed(beneficiary, claimable);
-        }
+        // Effects first
+        schedule.revoked = true;
+        schedule.totalAllocated = vested;
+        schedule.claimed = vested;
 
         uint256 unvested;
         unchecked {
             unvested = totalAllocated - vested;
         }
-        
-        // Mark as revoked
-        schedule.revoked = true;
-        // Reduce their total allocation to what was actually vested, effectively removing the unvested part
-        schedule.totalAllocated = vested;
-        
+
         Category storage category = categories[categoryId];
         category.totalAllocated -= unvested;
-
-        // Burn the unvested vMSC
-        vmscToken.burn(beneficiary, unvested);
-        
-        // Update total outstanding
         totalOutstandingMSC -= unvested;
+
+        if (claimable > 0) {
+            totalOutstandingMSC -= claimable;
+            mscToken.safeTransfer(beneficiary, claimable);
+            vmscToken.burn(beneficiary, claimable);
+            emit TokensClaimed(beneficiary, claimable);
+        }
+
+        if (unvested > 0) {
+            vmscToken.burn(beneficiary, unvested);
+        }
 
         emit Revoked(beneficiary, unvested);
     }
@@ -270,10 +281,12 @@ contract MSCVesting is Ownable, ReentrancyGuard {
 
         require(claimable > 0, "Nothing to claim");
 
+        // Effects before interactions
         schedule.claimed = claimed + claimable;
+        totalOutstandingMSC -= claimable;
+
         mscToken.safeTransfer(msg.sender, claimable);
         vmscToken.burn(msg.sender, claimable);
-        totalOutstandingMSC -= claimable;
 
         emit TokensClaimed(msg.sender, claimable);
     }

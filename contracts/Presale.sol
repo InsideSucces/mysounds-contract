@@ -8,12 +8,19 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 
+/**
+ * @title Presale
+ * @notice ETH → MSC sale priced via Uniswap V2 TWAP (not spot).
+ * @dev Oracle must be primed with `updateOracle()` and age ≥ TWAP_PERIOD before buys.
+ */
 contract Presale is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IERC20Metadata public immutable soundCoin;
     IUniswapV2Pair public immutable ethUsdPair;
     address public immutable usdToken;
+    /// @dev True when pair.token0() is the USD token (USDC/USDT); else WETH is token0.
+    bool private immutable _usdIsToken0;
 
     uint8 private immutable _tokenDecimals;
     uint256 private immutable _usdAdjustment;
@@ -44,6 +51,7 @@ contract Presale is Ownable, ReentrancyGuard {
     event WithdrawTokens(uint256 amount);
     event PresaleClosedEvent();
     event TokensDeposited(address indexed from, uint256 amount);
+    event OracleUpdated(uint256 priceCumulative, uint32 timestamp);
 
     error InsufficientPayment();
     error TransferFailed();
@@ -54,6 +62,8 @@ contract Presale is Ownable, ReentrancyGuard {
     error BuyLimitExceeded();
     error NotEnoughTokensInContract();
     error ZeroLiquidity();
+    error OracleNotReady();
+    error TwapPeriodNotElapsed();
 
     constructor(
         address _soundCoinAddress,
@@ -74,6 +84,11 @@ contract Presale is Ownable, ReentrancyGuard {
         usdToken = _usdToken;
         tokenWallet = msg.sender;
 
+        address token0 = ethUsdPair.token0();
+        address token1 = ethUsdPair.token1();
+        if (token0 != _usdToken && token1 != _usdToken) revert NullAddress();
+        _usdIsToken0 = token0 == _usdToken;
+
         _tokenDecimals = soundCoin.decimals();
         uint8 usdDecimals = IERC20Metadata(_usdToken).decimals();
         require(usdDecimals <= 18, "USD decimals too high");
@@ -92,10 +107,17 @@ contract Presale is Ownable, ReentrancyGuard {
         _;
     }
 
+    /**
+     * @notice Records a Uniswap cumulative price checkpoint. Call at least TWAP_PERIOD
+     * before the first purchase (and periodically thereafter).
+     */
+    function updateOracle() external {
+        _updateOracle();
+    }
+
     function buyTokens() public payable whenPresaleActive nonReentrant {
         uint256 ethPaid = msg.value;
-        uint256 usdPerEth = getEthPrice();
-        _updateOracle();
+        uint256 usdPerEth = _consultTwap();
         uint256 usdValue = (ethPaid * usdPerEth) / 1e18;
 
         if (usdValue < MIN_BUY) revert BuyLimitExceeded();
@@ -119,19 +141,11 @@ contract Presale is Ownable, ReentrancyGuard {
         emit Bought(msg.sender, ethPaid, usdValue, tokensToBuy);
     }
 
+    /**
+     * @notice Returns TWAP USD per ETH (1e18). Reverts if oracle is not ready.
+     */
     function getEthPrice() public view returns (uint256 usdPerEth) {
-        uint32 obsTimestamp = _lastObservation.timestamp;
-        if (obsTimestamp == 0) {
-            return _spotUsdPerEth();
-        }
-
-        uint256 elapsed = block.timestamp - obsTimestamp;
-        if (elapsed == 0) {
-            return _spotUsdPerEth();
-        }
-
-        uint256 currentCumulative = _currentCumulativeUsdPerEth();
-        usdPerEth = (currentCumulative - _lastObservation.priceCumulativeUsdPerEth) / elapsed;
+        return _consultTwap();
     }
 
     function closePresale() external onlyOwner {
@@ -152,6 +166,7 @@ contract Presale is Ownable, ReentrancyGuard {
     }
 
     function withdrawETH(address payable to) external onlyOwner whenPresaleClosed nonReentrant {
+        if (to == address(0)) revert NullAddress();
         uint256 bal = address(this).balance;
         (bool ok,) = to.call{value: bal}("");
         if (!ok) revert TransferFailed();
@@ -159,6 +174,7 @@ contract Presale is Ownable, ReentrancyGuard {
     }
 
     function withdrawTokens(address to) external onlyOwner whenPresaleClosed nonReentrant {
+        if (to == address(0)) revert NullAddress();
         uint256 contractBalance = soundCoin.balanceOf(address(this));
         uint256 unsold = 0;
         uint256 soldAmount = sold;
@@ -185,39 +201,45 @@ contract Presale is Ownable, ReentrancyGuard {
         buyTokens();
     }
 
-    function _spotUsdPerEth() internal view returns (uint256) {
-        (uint112 reserve0, uint112 reserve1,) = ethUsdPair.getReserves();
-        address token0 = ethUsdPair.token0();
+    function _consultTwap() internal view returns (uint256 usdPerEth) {
+        uint32 obsTimestamp = _lastObservation.timestamp;
+        if (obsTimestamp == 0) revert OracleNotReady();
 
-        uint256 reserveUsd;
-        uint256 reserveEth;
+        uint256 elapsed = block.timestamp - uint256(obsTimestamp);
+        if (elapsed < TWAP_PERIOD) revert TwapPeriodNotElapsed();
 
-        if (token0 == usdToken) {
-            reserveUsd = reserve0;
-            reserveEth = reserve1;
-        } else {
-            reserveUsd = reserve1;
-            reserveEth = reserve0;
-        }
-
-        if (reserveEth == 0) revert ZeroLiquidity();
-
-        return (reserveUsd * _usdAdjustment * 1e18) / reserveEth;
+        uint256 currentCumulative = _currentCumulativeUsdPerEth();
+        usdPerEth = (currentCumulative - _lastObservation.priceCumulativeUsdPerEth) / elapsed;
+        if (usdPerEth == 0) revert ZeroLiquidity();
     }
 
+    /**
+     * @dev Counterfactual cumulative matching MockUniswapV2Pair's 1e18 fixed-point encoding,
+     * then scaled by `_usdAdjustment` so TWAP is 18-decimal USD per ETH.
+     */
     function _currentCumulativeUsdPerEth() internal view returns (uint256) {
-        uint32 obsTimestamp = _lastObservation.timestamp;
-        if (obsTimestamp == 0) {
-            return 0;
+        uint256 priceCumulative =
+            _usdIsToken0 ? ethUsdPair.price1CumulativeLast() : ethUsdPair.price0CumulativeLast();
+        (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast) = ethUsdPair.getReserves();
+
+        if (reserve0 == 0 || reserve1 == 0) revert ZeroLiquidity();
+
+        uint32 timeElapsed = uint32(block.timestamp) - blockTimestampLast;
+        if (timeElapsed > 0) {
+            if (_usdIsToken0) {
+                priceCumulative += (uint256(reserve0) * 1e18 / uint256(reserve1)) * timeElapsed;
+            } else {
+                priceCumulative += (uint256(reserve1) * 1e18 / uint256(reserve0)) * timeElapsed;
+            }
         }
-        return _lastObservation.priceCumulativeUsdPerEth
-            + _spotUsdPerEth() * (block.timestamp - obsTimestamp);
+
+        return priceCumulative * _usdAdjustment;
     }
 
     function _updateOracle() internal {
-        _lastObservation = PriceObservation({
-            priceCumulativeUsdPerEth: _currentCumulativeUsdPerEth(),
-            timestamp: uint32(block.timestamp)
-        });
+        uint256 cumulative = _currentCumulativeUsdPerEth();
+        uint32 ts = uint32(block.timestamp);
+        _lastObservation = PriceObservation({priceCumulativeUsdPerEth: cumulative, timestamp: ts});
+        emit OracleUpdated(cumulative, ts);
     }
 }
