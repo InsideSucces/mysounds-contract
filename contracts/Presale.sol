@@ -21,6 +21,7 @@ contract Presale is Ownable, ReentrancyGuard {
     address public immutable usdToken;
     /// @dev True when pair.token0() is the USD token (USDC/USDT); else WETH is token0.
     bool private immutable _usdIsToken0;
+    address payable private immutable _reserveVault;
 
     uint8 private immutable _tokenDecimals;
     uint256 private immutable _usdAdjustment;
@@ -35,6 +36,7 @@ contract Presale is Ownable, ReentrancyGuard {
     uint256 public constant MAX_BUY = 50000 * 1e18;
     uint256 public constant ALLOCATION = 125_000_000 * 1e18;
     uint32 public constant TWAP_PERIOD = 30 minutes;
+    uint256 public constant RESERVE_BPS = 1000; // 10%
 
     struct PriceObservation {
         uint256 priceCumulativeUsdPerEth;
@@ -70,10 +72,11 @@ contract Presale is Ownable, ReentrancyGuard {
         uint256 _presaleStartTime,
         uint256 _presaleEndTime,
         address _pairAddress,
-        address _usdToken
+        address _usdToken,
+        address payable _vaultAddress
     ) Ownable(msg.sender) {
         require(_presaleEndTime > _presaleStartTime, "Bad time");
-        if (_soundCoinAddress == address(0) || _pairAddress == address(0) || _usdToken == address(0)) {
+        if (_soundCoinAddress == address(0) || _pairAddress == address(0) || _usdToken == address(0) || _vaultAddress == address(0)) {
             revert NullAddress();
         }
 
@@ -83,6 +86,7 @@ contract Presale is Ownable, ReentrancyGuard {
         ethUsdPair = IUniswapV2Pair(_pairAddress);
         usdToken = _usdToken;
         tokenWallet = msg.sender;
+        _reserveVault = _vaultAddress;
 
         address token0 = ethUsdPair.token0();
         address token1 = ethUsdPair.token1();
@@ -135,6 +139,12 @@ contract Presale is Ownable, ReentrancyGuard {
 
         contributions[msg.sender] = userContribution + usdValue;
         sold = soldAmount + tokensToBuy;
+
+        uint256 reserveShare = (ethPaid * RESERVE_BPS) / 10000;
+        if (reserveShare > 0) {
+            (bool ok,) = _reserveVault.call{value: reserveShare}("");
+            if (!ok) revert TransferFailed();
+        }
 
         IERC20(address(soundCoin)).safeTransfer(msg.sender, tokensToBuy);
 

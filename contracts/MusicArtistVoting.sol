@@ -5,14 +5,17 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /**
  * @title MusicArtistVoting
  * @dev Voting contract where users lock ERC-20 tokens (1 token = 1 vote weight).
- * Supports multiple voting cycles. After a cycle ends, voters reclaim their own
- * locked tokens. Admin may only withdraw excess tokens not owed to voters.
+ * Supports multiple voting cycles, EIP-712 gasless meta-transactions (voteBySig),
+ * and relayer-sponsored virtual MSC votes (voteForUser).
+ * After a cycle ends, token sponsors/voters reclaim their locked tokens.
  */
-contract MusicArtistVoting is Ownable, ReentrancyGuard {
+contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable voteToken;
@@ -20,6 +23,11 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
     uint256 public votingCycle;
     uint256 public votingStart;
     uint256 public votingEnd;
+
+    bytes32 public constant VOTE_TYPEHASH =
+        keccak256("Vote(address voter,uint256 cycleId,uint256 artistId,uint256 amount,uint256 nonce,uint256 deadline)");
+
+    mapping(address => uint256) public nonces;
 
     struct Artist {
         uint256 id;
@@ -51,7 +59,7 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
         _;
     }
 
-    constructor(address _voteToken) Ownable(msg.sender) {
+    constructor(address _voteToken) Ownable(msg.sender) EIP712("MusicArtistVoting", "1") {
         require(_voteToken != address(0), "Invalid token address");
         voteToken = IERC20(_voteToken);
         votingCycle = 1;
@@ -137,20 +145,78 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard {
     }
 
     function vote(uint256 _artistId, uint256 _amount) external onlyDuringVoting nonReentrant {
+        _castVote(msg.sender, msg.sender, _artistId, _amount);
+    }
+
+    /**
+     * @notice Cast vote using an EIP-712 signature (gasless / meta-transaction).
+     * @dev Allows relayers or third parties to broadcast on behalf of a signer who holds MSC.
+     */
+    function voteBySig(
+        address voter,
+        uint256 _artistId,
+        uint256 _amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external onlyDuringVoting nonReentrant {
+        require(voter != address(0), "Invalid voter address");
+        require(block.timestamp <= deadline, "Vote signature expired");
+
+        uint256 currentNonce = nonces[voter]++;
+        bytes32 structHash = keccak256(
+            abi.encode(
+                VOTE_TYPEHASH,
+                voter,
+                votingCycle,
+                _artistId,
+                _amount,
+                currentNonce,
+                deadline
+            )
+        );
+
+        bytes32 hash = _hashTypedDataV4(structHash);
+        address signer = ECDSA.recover(hash, v, r, s);
+        require(signer == voter, "Invalid vote signature");
+
+        _castVote(voter, voter, _artistId, _amount);
+    }
+
+    /**
+     * @notice Relayer/owner cast vote on behalf of an off-chain / virtual balance user.
+     * @dev msg.sender (relayer) sponsors the locked tokens; vote weight is attributed to voter.
+     */
+    function voteForUser(
+        address voter,
+        uint256 _artistId,
+        uint256 _amount
+    ) external onlyOwner onlyDuringVoting nonReentrant {
+        require(voter != address(0), "Invalid voter address");
+        _castVote(voter, msg.sender, _artistId, _amount);
+    }
+
+    function _castVote(
+        address voter,
+        address tokenPayer,
+        uint256 _artistId,
+        uint256 _amount
+    ) internal {
         uint256 cycle = votingCycle;
         Artist storage artist = artists[cycle][_artistId];
         require(artist.exists, "Artist does not exist");
         require(_amount > 0, "Vote amount must be greater than 0");
 
-        voteToken.safeTransferFrom(msg.sender, address(this), _amount);
+        voteToken.safeTransferFrom(tokenPayer, address(this), _amount);
 
         artist.totalVotes += _amount;
-        userVotes[cycle][msg.sender][_artistId] += _amount;
-        totalUserLocked[cycle][msg.sender] += _amount;
+        userVotes[cycle][voter][_artistId] += _amount;
+        totalUserLocked[cycle][tokenPayer] += _amount;
         cycleTotalLocked[cycle] += _amount;
         cycleOutstanding[cycle] += _amount;
 
-        emit VoteCast(cycle, msg.sender, _artistId, _amount);
+        emit VoteCast(cycle, voter, _artistId, _amount);
     }
 
     function getArtist(uint256 _artistId)

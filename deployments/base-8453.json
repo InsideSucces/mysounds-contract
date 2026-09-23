@@ -1,14 +1,15 @@
 {
   "network": "base",
   "chainId": 8453,
-  "deployer": "0xC17e0A735e5438b715d55c2dDa2a24BD850dc88A",
-  "deployedAtBlock": "46224355",
+  "deployer": "0x79c49aA5743B0f82098045bc8eB2f9AC1e0B6904",
+  "deployedAtBlock": "51558021",
   "contracts": {
-    "SoundCoin": "0xD8de18653E0D6B9b279A259816a4F16ef7cE4a9A",
-    "RewardManager": "0x26ab95C9Cd1bE4F7Bb98a023811D811727BF34a5",
-    "MusicArtistVoting": "0x4B6CA70141729d2A6D2D65fdF9fc431cA3fac66e",
-    "vMSC": "0xbd2339C4b831560Be587e1a2A8874fc9b444173B",
-    "MSCVesting": "0x9D2858e89E53466A1AAfD5d2e72A88026Ee60453",
-    "CouponManager": "0x2123418C59EF5bbC007eA73Ab42f639809db1eF6"
+    "SoundCoin": "0x68B6E389e6633EAcec71f9be20a4B044db2c5c1A",
+    "RewardManager": "0x49E28E1bad4Acb5d1c3692834152D5fE62Fd6853",
+    "MusicArtistVoting": "0xa2E9c1b22b5896f3b735C67146b6634Aa66A4949",
+    "vMSC": "0xDD42B9660553daaCc995Fe7d8b009e675a7a8Baf",
+    "MSCVesting": "0x2074a5585DB261225B1D10cF1f3ED9E68fE9D54e",
+    "CouponManager": "0xc522AaA3Fa9ad1552B5FB8da645728106E563b9a",
+    "Presale": "0x369706792f86877c6B2bdB8F7bC9053850DA7ce5"
   }
 }

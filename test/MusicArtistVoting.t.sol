@@ -291,4 +291,154 @@ contract MusicArtistVotingTest is Test {
         vm.prank(user1);
         voting.reclaimTokens(0);
     }
+
+    function test_VoteBySig_Success() public {
+        uint256 signerPk = 0xA11CE;
+        address signer = vm.addr(signerPk);
+        token.mint(signer, INITIAL_BALANCE);
+
+        vm.prank(signer);
+        token.approve(address(voting), type(uint256).max);
+
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 1000);
+
+        uint256 deadline = block.timestamp + 500;
+        uint256 amount = 50e18;
+        uint256 nonce = voting.nonces(signer);
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                voting.VOTE_TYPEHASH(),
+                signer,
+                1, // cycle 1
+                1, // artist 1
+                amount,
+                nonce,
+                deadline
+            )
+        );
+
+        // Derive domain separator directly using standard EIP-712 schema
+        bytes32 typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                typeHash,
+                keccak256(bytes("MusicArtistVoting")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(voting)
+            )
+        );
+
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+
+        // Broadcast by relayer (address(0x999))
+        vm.prank(address(0x999));
+        voting.voteBySig(signer, 1, amount, deadline, v, r, s);
+
+        (,,, uint256 totalVotes) = voting.getArtist(1);
+        assertEq(totalVotes, amount);
+        assertEq(voting.userVotes(1, signer, 1), amount);
+        assertEq(voting.totalUserLocked(1, signer), amount);
+        assertEq(voting.nonces(signer), 1);
+    }
+
+    function test_RevertIf_VoteBySig_Expired() public {
+        uint256 signerPk = 0xA11CE;
+        address signer = vm.addr(signerPk);
+        token.mint(signer, INITIAL_BALANCE);
+
+        vm.prank(signer);
+        token.approve(address(voting), type(uint256).max);
+
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 1000);
+
+        uint256 deadline = block.timestamp + 10;
+        uint256 amount = 50e18;
+        uint256 nonce = voting.nonces(signer);
+
+        bytes32 structHash = keccak256(
+            abi.encode(voting.VOTE_TYPEHASH(), signer, 1, 1, amount, nonce, deadline)
+        );
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("MusicArtistVoting")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(voting)
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+
+        vm.warp(block.timestamp + 11);
+        vm.expectRevert("Vote signature expired");
+        voting.voteBySig(signer, 1, amount, deadline, v, r, s);
+    }
+
+    function test_RevertIf_VoteBySig_Replay() public {
+        uint256 signerPk = 0xA11CE;
+        address signer = vm.addr(signerPk);
+        token.mint(signer, INITIAL_BALANCE);
+
+        vm.prank(signer);
+        token.approve(address(voting), type(uint256).max);
+
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 1000);
+
+        uint256 deadline = block.timestamp + 500;
+        uint256 amount = 50e18;
+        uint256 nonce = voting.nonces(signer);
+
+        bytes32 structHash = keccak256(
+            abi.encode(voting.VOTE_TYPEHASH(), signer, 1, 1, amount, nonce, deadline)
+        );
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("MusicArtistVoting")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(voting)
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+
+        voting.voteBySig(signer, 1, amount, deadline, v, r, s);
+
+        // Replay attempt must revert
+        vm.expectRevert("Invalid vote signature");
+        voting.voteBySig(signer, 1, amount, deadline, v, r, s);
+    }
+
+    function test_VoteForUser_VirtualMSC_Success() public {
+        address relayer = address(this);
+        address virtualUser = address(0xABC);
+
+        token.mint(relayer, INITIAL_BALANCE);
+        token.approve(address(voting), type(uint256).max);
+
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 1000);
+
+        // Relayer sponsors tokens for virtual user
+        voting.voteForUser(virtualUser, 1, 25e18);
+
+        (,,, uint256 totalVotes) = voting.getArtist(1);
+        assertEq(totalVotes, 25e18);
+        assertEq(voting.userVotes(1, virtualUser, 1), 25e18);
+        assertEq(voting.totalUserLocked(1, relayer), 25e18);
+
+        // After window ends, relayer reclaims sponsored tokens
+        vm.warp(block.timestamp + 1001);
+        uint256 relayerBalBefore = token.balanceOf(relayer);
+        voting.reclaimTokens(1);
+        assertEq(token.balanceOf(relayer) - relayerBalBefore, 25e18);
+    }
 }

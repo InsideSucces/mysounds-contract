@@ -96,27 +96,29 @@ contract MSCVestingTest is Test {
 
     function test_VestingAfterCliffAndLinearity() public {
         uint256 amount = 1_000_000 * 10**18;
-        uint256 startTime = block.timestamp;
+        uint256 t0 = 10_000;
+        vm.warp(t0);
         
-        vesting.createVestingSchedule(beneficiary1, TEAM_CATEGORY, amount, startTime);
+        vesting.createVestingSchedule(beneficiary1, TEAM_CATEGORY, amount, t0);
 
         // Move to exactly cliff (1 year / 365 days)
         // 365 days / 1460 days = 0.25 (25%)
-        vm.warp(startTime + 365 days);
+        vm.warp(t0 + 365 days);
         
         uint256 claimable = vesting.getClaimableAmount(beneficiary1);
         uint256 expected = amount * 365 / 1460;
-        
-        assertApproxEqAbs(claimable, expected, 1e18); // Allow small rounding diff
+        assertApproxEqAbs(claimable, expected, 1e18);
 
         // Move to halfway (2 years)
         // 730 / 1460 = 0.5 (50%)
-        vm.warp(startTime + 730 days);
+        vm.warp(t0 + 730 days);
         claimable = vesting.getClaimableAmount(beneficiary1);
         expected = amount * 730 / 1460;
         
         assertApproxEqAbs(claimable, expected, 1e18);
     }
+
+
 
     function test_Claiming() public {
         uint256 amount = 1_000_000 * 10**18;

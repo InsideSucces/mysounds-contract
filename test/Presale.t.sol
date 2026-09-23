@@ -17,6 +17,7 @@ contract PresaleTest is Test {
     address public buyer1 = address(0x2);
     address public buyer2 = address(0x3);
     address public tokenWallet = address(0x4);
+    address payable public reserveVault = payable(address(0x5));
 
     uint8 public constant DECIMALS = 18;
     uint256 public constant TOKEN_SUPPLY = 500_000_000 * 1e18;
@@ -50,7 +51,12 @@ contract PresaleTest is Test {
         presaleEndTime = presaleStartTime + 30 days;
 
         presale = new Presale(
-            address(soundCoin), presaleStartTime, presaleEndTime, address(ethUsdPair), address(usdToken)
+            address(soundCoin),
+            presaleStartTime,
+            presaleEndTime,
+            address(ethUsdPair),
+            address(usdToken),
+            reserveVault
         );
 
         presale.setTokenWallet(tokenWallet);
@@ -147,7 +153,18 @@ contract PresaleTest is Test {
     //     vm.prank(newBuyer);
     //     vm.expectRevert(Presale.AllocationExceeded.selector);
     //     presale.buyTokens{value: 20 ether}();
-    // }
+    function test_BuyTokens_FeeSplit10Percent() public {
+        uint256 ethToSend = 1 ether;
+        uint256 devBalBefore = reserveVault.balance;
+
+        vm.deal(buyer1, 10 ether);
+        vm.prank(buyer1);
+        presale.buyTokens{value: ethToSend}();
+
+        // 10% reserve share to reserveVault (0.1 ETH), 90% in presale contract (0.9 ETH)
+        assertEq(reserveVault.balance - devBalBefore, 0.1 ether);
+        assertEq(address(presale).balance, 0.9 ether);
+    }
 
     function test_BuyTokens_FullEthHeldByPresale() public {
         uint256 ethToSend = 1 ether;
@@ -156,7 +173,8 @@ contract PresaleTest is Test {
         vm.prank(buyer1);
         presale.buyTokens{value: ethToSend}();
 
-        assertEq(address(presale).balance, ethToSend);
+        // Contract retains 90% (0.9 ETH) after 10% reserve split
+        assertEq(address(presale).balance, 0.9 ether);
     }
 
     function test_BuyTokens_NotEnoughTokensInContract() public {
@@ -165,7 +183,8 @@ contract PresaleTest is Test {
             block.timestamp + 1,
             block.timestamp + 7 days,
             address(ethUsdPair),
-            address(usdToken)
+            address(usdToken),
+            reserveVault
         );
 
         underfunded.setTokenWallet(tokenWallet);
@@ -209,7 +228,8 @@ contract PresaleTest is Test {
         vm.prank(owner);
         presale.withdrawETH(recipient);
 
-        assertEq(recipient.balance, initialBal + 5 ether);
+        // 90% of 5 ETH = 4.5 ETH
+        assertEq(recipient.balance, initialBal + 4.5 ether);
     }
 
     function test_WithdrawUnsoldTokens() public {
@@ -264,7 +284,8 @@ contract PresaleTest is Test {
             block.timestamp,
             block.timestamp + 7 days,
             address(ethUsdPair),
-            address(usdToken)
+            address(usdToken),
+            reserveVault
         );
         vm.deal(buyer1, 1 ether);
         vm.prank(buyer1);
@@ -278,7 +299,8 @@ contract PresaleTest is Test {
             block.timestamp,
             block.timestamp + 7 days,
             address(ethUsdPair),
-            address(usdToken)
+            address(usdToken),
+            reserveVault
         );
         ethUsdPair.sync();
         fresh.updateOracle();
@@ -299,7 +321,8 @@ contract PresaleTest is Test {
             block.timestamp + 1,
             block.timestamp + 1 days,
             address(ethUsdPair),
-            address(usdToken)
+            address(usdToken),
+            reserveVault
         );
 
         vm.prank(owner);
