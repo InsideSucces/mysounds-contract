@@ -16,10 +16,9 @@ contract RedeployPresaleAndReward is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
-        uint256 presaleStartTime = vm.envOr("PRESALE_START_TIME", block.timestamp);
-        uint256 presaleEndTime = vm.envOr("PRESALE_END_TIME", block.timestamp + 30 days);
-        address pairAddress = vm.envOr("PRESALE_PAIR_ADDRESS", address(0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C));
-        address usdToken = vm.envOr("PRESALE_USD_TOKEN", address(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913));
+        uint256 presaleStartTime = vm.envOr("PRESALE_START_TIME", uint256(1790553600));
+        uint256 presaleEndTime = vm.envOr("PRESALE_END_TIME", presaleStartTime + 30 days);
+        address priceFeedAddress = vm.envOr("PRESALE_PRICE_FEED", address(0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70));
         address payable vaultAddress = payable(vm.envOr("PRESALE_VAULT_ADDRESS", address(0x9A6395F8456a8CDE8Cafc3E67cD5Cf918a42d4cc)));
 
         console.log("=== Redeploying Presale and RewardManager to Base ===");
@@ -41,8 +40,7 @@ contract RedeployPresaleAndReward is Script {
             SOUND_COIN,
             presaleStartTime,
             presaleEndTime,
-            pairAddress,
-            usdToken,
+            priceFeedAddress,
             vaultAddress
         );
         console.log("New Presale:", address(presale));

@@ -87,10 +87,9 @@ contract DeployAllBase is Script {
 
         Presale presale = new Presale(
             c.soundCoin,
-            vm.envOr("PRESALE_START_TIME", block.timestamp + 1 hours),
-            vm.envOr("PRESALE_END_TIME", block.timestamp + 30 days),
-            vm.envOr("PRESALE_PAIR_ADDRESS", address(0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C)),
-            vm.envOr("PRESALE_USD_TOKEN", address(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)),
+            vm.envOr("PRESALE_START_TIME", uint256(1790553600)),
+            vm.envOr("PRESALE_END_TIME", uint256(1790553600) + 30 days),
+            vm.envOr("PRESALE_PRICE_FEED", address(0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70)),
             payable(vm.envOr("PRESALE_VAULT_ADDRESS", deployer))
         );
         c.presale = address(presale);
