@@ -5,7 +5,7 @@
   "deployedAtBlock": "51558021",
   "contracts": {
     "SoundCoin": "0x68B6E389e6633EAcec71f9be20a4B044db2c5c1A",
-    "RewardManager": "0x7b6A58D818617F11C858e3C90f84c66056Fb4428",
+    "RewardManager": "0x1e36405B6DaD2441Bca68147f8b250302F2889c8",
     "MusicArtistVoting": "0xa2E9c1b22b5896f3b735C67146b6634Aa66A4949",
     "vMSC": "0xDD42B9660553daaCc995Fe7d8b009e675a7a8Baf",
     "MSCVesting": "0x2074a5585DB261225B1D10cF1f3ED9E68fE9D54e",
