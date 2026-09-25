@@ -63,11 +63,22 @@ contract MusicArtistVotingTest is Test {
         voting.registerArtist(2, "Hacker Artist");
     }
 
-    function test_RevertIf_RegisterDuringVoting() public {
+    function test_RegisterDuringVoting_Succeeds() public {
         voting.registerArtist(1, "Artist One");
         voting.setVotingWindow(block.timestamp, block.timestamp + 1000);
-        vm.expectRevert("Cannot register during or after voting");
+        // Registering during voting should now succeed
         voting.registerArtist(2, "Late Artist");
+        (uint256 id, string memory name, bool exists, uint256 totalVotes) = voting.getArtist(2);
+        assertTrue(exists);
+        assertEq(name, "Late Artist");
+    }
+
+    function test_RevertIf_RegisterAfterVotingEnded() public {
+        voting.registerArtist(1, "Artist One");
+        voting.setVotingWindow(block.timestamp, block.timestamp + 100);
+        vm.warp(block.timestamp + 200);
+        vm.expectRevert("Cannot register after cycle has ended");
+        voting.registerArtist(2, "Expired Artist");
     }
 
     function test_SetVotingWindow() public {

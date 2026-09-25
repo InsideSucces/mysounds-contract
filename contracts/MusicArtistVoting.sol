@@ -68,8 +68,8 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
     function registerArtist(uint256 _artistId, string memory _name) external onlyOwner {
         require(!artists[votingCycle][_artistId].exists, "Artist ID already exists in this cycle");
         require(bytes(_name).length > 0, "Artist name cannot be empty");
-        // Prevent mid-vote artist injection that could dilute / redirect votes.
-        require(votingEnd == 0 || block.timestamp < votingStart, "Cannot register during or after voting");
+        // Allow registering artists at any point before voting cycle ends.
+        require(votingEnd == 0 || block.timestamp <= votingEnd, "Cannot register after cycle has ended");
 
         artists[votingCycle][_artistId] = Artist({
             id: _artistId,
@@ -146,6 +146,17 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
 
     function vote(uint256 _artistId, uint256 _amount) external onlyDuringVoting nonReentrant {
         _castVote(msg.sender, msg.sender, _artistId, _amount);
+    }
+
+    /**
+     * @notice Cast multiple votes in a single transaction (batch voting).
+     */
+    function voteBatch(uint256[] calldata _artistIds, uint256[] calldata _amounts) external onlyDuringVoting nonReentrant {
+        require(_artistIds.length == _amounts.length, "Array lengths must match");
+        require(_artistIds.length > 0, "Empty batch");
+        for (uint256 i = 0; i < _artistIds.length; i++) {
+            _castVote(msg.sender, msg.sender, _artistIds[i], _amounts[i]);
+        }
     }
 
     /**
