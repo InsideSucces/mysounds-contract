@@ -49,6 +49,7 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
     event VotingWindowSet(uint256 indexed cycleId, uint256 startTime, uint256 endTime);
     event TokensReclaimed(uint256 indexed cycleId, address indexed voter, uint256 amount);
     event ExcessTokensWithdrawn(uint256 indexed cycleId, address indexed admin, uint256 amount);
+    event TokensWithdrawn(address indexed to, uint256 amount);
     event NewVotingCycleStarted(uint256 indexed newCycleId);
 
     modifier onlyDuringVoting() {
@@ -131,6 +132,20 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
         uint256 excess = balance - totalOwed;
         voteToken.safeTransfer(to, excess);
         emit ExcessTokensWithdrawn(votingCycle, to, excess);
+    }
+
+    /**
+     * @notice Withdraw tokens from the contract to a specified wallet address.
+     * @param to Recipient wallet address.
+     * @param amount Amount to withdraw in token base units (0 = withdraw all tokens in contract).
+     */
+    function withdrawTokens(address to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        uint256 balance = voteToken.balanceOf(address(this));
+        require(balance > 0, "No tokens to withdraw");
+        uint256 toWithdraw = (amount == 0 || amount > balance) ? balance : amount;
+        voteToken.safeTransfer(to, toWithdraw);
+        emit TokensWithdrawn(to, toWithdraw);
     }
 
     function startNewVotingCycle() external onlyOwner {
