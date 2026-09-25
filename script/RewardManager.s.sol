@@ -1,24 +1,34 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Script} from "forge-std/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 import {RewardManager} from "../contracts/RewardManager.sol";
 
 contract DeployRewardManager is Script {
+    address internal constant SOUND_COIN = 0x68B6E389e6633EAcec71f9be20a4B044db2c5c1A;
+    uint256 internal constant REWARD_SUPPLY = 62_500_000 * 1e18;
+    uint256 internal constant BASE_RATE = 1e18; // 1 MSC base rate
+    address internal constant BACKEND_ADMIN = 0xA80b312006A918a441f9C4F51b6f773CEFFbB6b3;
+
     function run() external {
-        // Configuration
-        address tokenAddress = 0x4Bb738eb7604Cfa7520E8a00ec208625ac49752B;
-        //address testTokenAddress = 0x7Ff631535006c76Cb02e59d5071Da29Cb79340DE;
-        uint256 totalSupply = 62_500_000 * 1e18; // 62.5M tokens halfsupply for community reward 125M total
-        uint256 baseRate = 1e18; // 1 token base rate
-        address backendAdmin = 0xA80b312006A918a441f9C4F51b6f773CEFFbB6b3;
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
 
-        vm.startBroadcast();
+        console.log("=== Deploying RewardManager to Base ===");
+        console.log("Deployer:", deployer);
+        console.log("SoundCoin:", SOUND_COIN);
 
-        RewardManager manager = new RewardManager(tokenAddress, totalSupply, baseRate, msg.sender, backendAdmin);
-        // Optional: Setup initial roles if needed (admin is msg.sender)
-        // address backend = ...;
-        // manager.grantRole(manager.BACKEND_ROLE(), backend);
+        vm.startBroadcast(deployerPrivateKey);
+
+        RewardManager manager = new RewardManager(
+            SOUND_COIN,
+            REWARD_SUPPLY,
+            BASE_RATE,
+            deployer,
+            BACKEND_ADMIN
+        );
+
+        console.log("Newly Deployed RewardManager:", address(manager));
 
         vm.stopBroadcast();
     }

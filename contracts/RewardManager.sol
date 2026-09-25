@@ -30,17 +30,17 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin_);
         _grantRole(BACKEND_ROLE, backendAdmin_);
 
-        // default weights (scaled integer weights)
-        s.actionWeights[uint256(Action.SIGNUP)] = 100; // baseline weight
-        s.actionWeights[uint256(Action.LIKE_MILESTONE)] = 20;
-        s.actionWeights[uint256(Action.PURCHASE)] = 200;
-        s.actionWeights[uint256(Action.DAILY_STREAK)] = 30;
-        s.actionWeights[uint256(Action.UPLOAD)] = 150;
-        s.actionWeights[uint256(Action.COMMENT)] = 10;
-        s.actionWeights[uint256(Action.REFERRAL)] = 500;
-        s.actionWeights[uint256(Action.STREAMING)] = 5;
-        s.actionWeights[uint256(Action.EVENT_ATTENDANCE)] = 50;
-        s.actionWeights[uint256(Action.ARTIST_MILESTONE)] = 400;
+        // default weights (scaled 18-decimal fixed point values)
+        s.actionWeights[uint256(Action.SIGNUP)] = 100 * RewardScaling.SCALE; // baseline weight 100 MSC
+        s.actionWeights[uint256(Action.LIKE_MILESTONE)] = 20 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.PURCHASE)] = 200 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.DAILY_STREAK)] = 30 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.UPLOAD)] = 150 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.COMMENT)] = 10 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.REFERRAL)] = 500 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.STREAMING)] = 5 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.EVENT_ATTENDANCE)] = 50 * RewardScaling.SCALE;
+        s.actionWeights[uint256(Action.ARTIST_MILESTONE)] = 400 * RewardScaling.SCALE;
     }
 
     modifier onlyBackend() {
@@ -93,8 +93,8 @@ contract RewardManager is IRewardManager, AccessControl, Ownable, ReentrancyGuar
         uint256 weight = s.actionWeights[uint256(action)];
         if (weight == 0) return 0;
 
-        // base amount: baseRate * weight
-        uint256 base = s.baseRate * weight;
+        // base amount: (baseRate * weight) / SCALE
+        uint256 base = (s.baseRate * weight) / RewardScaling.SCALE;
 
         // scale by remaining allocation
         uint256 remaining = 0;

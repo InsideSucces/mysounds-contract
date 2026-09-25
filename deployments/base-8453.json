@@ -5,11 +5,11 @@
   "deployedAtBlock": "51558021",
   "contracts": {
     "SoundCoin": "0x68B6E389e6633EAcec71f9be20a4B044db2c5c1A",
-    "RewardManager": "0x49E28E1bad4Acb5d1c3692834152D5fE62Fd6853",
+    "RewardManager": "0x1e36405B6DaD2441Bca68147f8b250302F2889c8",
     "MusicArtistVoting": "0xa2E9c1b22b5896f3b735C67146b6634Aa66A4949",
     "vMSC": "0xDD42B9660553daaCc995Fe7d8b009e675a7a8Baf",
     "MSCVesting": "0x2074a5585DB261225B1D10cF1f3ED9E68fE9D54e",
     "CouponManager": "0xc522AaA3Fa9ad1552B5FB8da645728106E563b9a",
-    "Presale": "0x369706792f86877c6B2bdB8F7bC9053850DA7ce5"
+    "Presale": "0xDCDc2BBFa3F89CdA84286D6985936834Ff800268"
   }
 }
