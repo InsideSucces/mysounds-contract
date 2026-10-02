@@ -99,6 +99,17 @@ contract MusicArtistVoting is Ownable, ReentrancyGuard, EIP712 {
     }
 
     /**
+     * @notice Allows the contract owner/admin to close the active voting window early.
+     */
+    function closeVotingWindow() external onlyOwner {
+        require(votingStart != 0, "Voting window not set");
+        require(block.timestamp <= votingEnd, "Voting is already closed");
+
+        votingEnd = block.timestamp;
+        emit VotingWindowSet(votingCycle, votingStart, votingEnd);
+    }
+
+    /**
      * @notice Voters reclaim their locked tokens after that cycle's voting ends.
      * @param _cycleId Cycle to reclaim from (0 = current cycle).
      */

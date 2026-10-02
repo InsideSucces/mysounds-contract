@@ -1,7 +1,7 @@
 {
   "transactions": [
     {
-      "hash": null,
+      "hash": "0x56ba7ee499749dad54cef98e6d5ed1a535a08c9558824e0d0f0ed3e55039b7a6",
       "transactionType": "CREATE",
       "contractName": "MusicArtistVoting",
       "contractAddress": "0x5bbce0990817e46a178c306e0ebb74ee06be3976",
@@ -23,11 +23,53 @@
       "isFixedGasLimit": false
     }
   ],
-  "receipts": [],
+  "receipts": [
+    {
+      "type": "0x0",
+      "status": "0x1",
+      "cumulativeGasUsed": "0x1692d8f",
+      "logs": [
+        {
+          "address": "0x5bbce0990817e46a178c306e0ebb74ee06be3976",
+          "topics": [
+            "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x00000000000000000000000079c49aa5743b0f82098045bc8eb2f9ac1e0b6904"
+          ],
+          "data": "0x",
+          "blockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "blockNumber": "0x3197745",
+          "blockTimestamp": "0x6abd4b6d",
+          "transactionHash": "0x56ba7ee499749dad54cef98e6d5ed1a535a08c9558824e0d0f0ed3e55039b7a6",
+          "transactionIndex": "0x9f",
+          "logIndex": "0x193",
+          "removed": false
+        }
+      ],
+      "logsBloom": "0x00000040000000000000000000000000000000000000000000800100000000000000000000000001000000000000020000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000020000000000000000000800000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000800000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000",
+      "transactionHash": "0x56ba7ee499749dad54cef98e6d5ed1a535a08c9558824e0d0f0ed3e55039b7a6",
+      "transactionIndex": "0x9f",
+      "blockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "blockNumber": "0x3197745",
+      "gasUsed": "0x23781a",
+      "effectiveGasPrice": "0x5b8d80",
+      "blobGasUsed": "0xffdb4",
+      "from": "0x79c49aa5743b0f82098045bc8eb2f9ac1e0b6904",
+      "to": null,
+      "contractAddress": "0x5bbce0990817e46a178c306e0ebb74ee06be3976",
+      "l1GasPrice": "0x46eed301",
+      "l1GasUsed": "0x1ba90",
+      "l1Fee": "0x974b06441",
+      "l1BaseFeeScalar": "0x8dd",
+      "l1BlobBaseFee": "0x33f19dc",
+      "l1BlobBaseFeeScalar": "0x101c12",
+      "daFootprintGasScalar": "0x94"
+    }
+  ],
   "libraries": [],
   "pending": [],
   "returns": {},
-  "timestamp": 1790790574948,
+  "timestamp": 1790790508665,
   "chain": 8453,
   "commit": "1946378"
 }
