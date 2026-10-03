@@ -1,0 +1,43 @@
+Compiling 2 files with Solc 0.8.24
+Solc 0.8.24 finished in 19.38s
+Compiler run successful!
+Warning: Detected artifacts built from source files that no longer exist. Run `forge clean` to make sure builds are in sync with project files.
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper56.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper39.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper59.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper38.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper61.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper69.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper57.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper58.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper40.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper41.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper66.sol
+ - /Users/0x....apus/Desktop/insidesuccess/mysound/web3/foundry-pp/DeployHelper70.sol
+Script ran successfully.
+
+== Logs ==
+  === Deploying MusicArtistVoting to Base ===
+  Deployer: 0x79c49aA5743B0f82098045bc8eB2f9AC1e0B6904
+  Vote Token (MSC): 0x68B6E389e6633EAcec71f9be20a4B044db2c5c1A
+  New MusicArtistVoting deployed at: 0x5bBCE0990817e46A178c306e0eBb74EE06bE3976
+
+## Setting up 1 EVM.
+
+==========================
+
+Chain 8453
+
+Estimated gas price: 0.006 gwei
+
+Estimated total gas used for script: 3021857
+
+Estimated amount required: 0.000018131142 ETH
+
+==========================
+
+Transactions saved to: /Users/0x....apus/Desktop/insidesuccess/mysound/web3/broadcast/DeployMusicArtistVoting.s.sol/8453/run-latest.json
+
+Sensitive values saved to: /Users/0x....apus/Desktop/insidesuccess/mysound/web3/cache/DeployMusicArtistVoting.s.sol/8453/run-latest.json
+
+Error: Failed to send transaction after 4 attempts Err(server returned an error response: error code -32000: nonce too low: next nonce 307, tx nonce 306)
